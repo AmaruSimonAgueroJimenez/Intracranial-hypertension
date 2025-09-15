@@ -1,0 +1,73 @@
+---
+title: "Intracranial Hypertension"
+author:
+  - name: "Rocío Beasaín MD"
+  - name: "Verónica Fernandez MD"
+  - name: "Francisco Sepulveda MD"
+  - name: "Amaru Simón Agüero Jiménez"
+    email: "aaguero@miaundes.cl"
+    orcid: "0000-0001-7336-1833"
+date: "`r Sys.Date()`"
+lang: en
+format:
+  html:
+    smooth-scroll: true
+    toc: true
+    toc-depth: 6
+    toc-location: right
+    number-sections: true
+    number-depth: 6
+    code-fold: true
+    bibliography: ref.bib
+    csl: apa-numeric-superscript.csl
+    fig-cap-location: bottom
+#    css: styles.css
+execute:
+  warning: false #que los chunks no arrojen mensajes de emergencia
+  message: false #que los chunks no arrojen mensajes
+  fig-width: 14 #ancho de las figuras en el documento
+  fig-height: 10 #alto de las figuras
+---
+
+```{r}
+load_my_packages <- function() {
+  # Paquetes solicitados (kableExtra -> DT)
+  pkgs <- c(
+    "MASS",          # cargar antes de tidyverse para evitar conflictos
+    "tidyverse",
+    "readxl",
+    "rstatix",
+    "formattable",
+    "DT",            # reemplazo de kableExtra
+    "ThresholdROC",
+    "pROC",
+    "epitools",
+    "stringr"
+  )
+  pkgs <- unique(pkgs)
+
+  # Instalar los que falten
+  to_install <- setdiff(pkgs, rownames(installed.packages()))
+  if (length(to_install)) {
+    install.packages(to_install, dependencies = TRUE)
+  }
+
+  # Asegurar orden de carga: MASS, tidyverse, luego el resto
+  load_order <- c("MASS", "tidyverse", setdiff(pkgs, c("MASS", "tidyverse")))
+
+  # Cargar silenciosamente
+  loaded <- vapply(
+    load_order,
+    function(p) suppressPackageStartupMessages(require(p, character.only = TRUE)),
+    logical(1)
+  )
+
+  if (!all(loaded)) {
+    warning("No se pudieron cargar: ", paste(load_order[!loaded], collapse = ", "))
+  }
+  invisible(loaded)
+}
+
+load_my_packages()
+```
+
