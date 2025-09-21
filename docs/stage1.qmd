@@ -29,45 +29,2667 @@ execute:
   fig-height: 10 #alto de las figuras
 ---
 
+# Frisen 1-5
+
 ```{r}
-load_my_packages <- function() {
-  # Paquetes solicitados (kableExtra -> DT)
-  pkgs <- c(
-    "MASS",          # cargar antes de tidyverse para evitar conflictos
-    "tidyverse",
-    "readxl",
-    "rstatix",
-    "formattable",
-    "DT",            # reemplazo de kableExtra
-    "ThresholdROC",
-    "pROC",
-    "epitools",
-    "stringr"
-  )
-  pkgs <- unique(pkgs)
+# =====================================================================
+# ANÁLISIS COMPLETO DE HIPERTENSIÓN INTRACRANEAL - HIPERTENSIÓN 1
+# Versión adaptada para datos con variables por ojo (OD/OI)
+# Incluye todas las tablas y figuras del análisis original
+# =====================================================================
 
-  # Instalar los que falten
-  to_install <- setdiff(pkgs, rownames(installed.packages()))
-  if (length(to_install)) {
-    install.packages(to_install, dependencies = TRUE)
-  }
+# =====================================================================
+# CARGA DE PAQUETES
+# =====================================================================
 
-  # Asegurar orden de carga: MASS, tidyverse, luego el resto
-  load_order <- c("MASS", "tidyverse", setdiff(pkgs, c("MASS", "tidyverse")))
-
-  # Cargar silenciosamente
-  loaded <- vapply(
-    load_order,
-    function(p) suppressPackageStartupMessages(require(p, character.only = TRUE)),
-    logical(1)
-  )
-
-  if (!all(loaded)) {
-    warning("No se pudieron cargar: ", paste(load_order[!loaded], collapse = ", "))
-  }
-  invisible(loaded)
+# Función para instalar/cargar paquetes
+use_packages <- function(pkgs){
+  new_pkgs <- pkgs[!(pkgs %in% rownames(installed.packages()))]
+  if(length(new_pkgs)) install.packages(new_pkgs, dependencies = TRUE)
+  invisible(lapply(pkgs, library, character.only = TRUE))
 }
 
-load_my_packages()
+use_packages(c(
+  "DT", "readxl", "tidyverse", "rstatix", "MASS",
+  "pROC", "epitools", "stringr", "ggpubr", "plotly",
+  "broom.mixed", "htmlwidgets", "tableone"
+))
+
+options(scipen = 100, digits = 3)
+
+# =====================================================================
+# CARGA Y PREPROCESAMIENTO DE DATOS
+# =====================================================================
+
+# Función para encontrar el directorio raíz del proyecto
+project_root <- function(){
+  qdir <- Sys.getenv("QUARTO_PROJECT_DIR")
+  if (nzchar(qdir)) return(normalizePath(qdir, winslash = "/", mustWork = FALSE))
+  
+  ci <- knitr::current_input()
+  if (!is.null(ci) && length(ci) == 1 && nzchar(ci)) {
+    p <- normalizePath(ci, winslash = "/", mustWork = FALSE)
+    d <- dirname(p)
+    if (basename(d) == "docs") return(dirname(d))
+    return(d)
+  }
+  
+  od <- knitr::opts_knit$get("output.dir")
+  if (!is.null(od) && nzchar(od)) {
+    od <- normalizePath(od, winslash = "/", mustWork = FALSE)
+    if (basename(od) == "docs") return(dirname(od))
+    return(od)
+  }
+  
+  cur <- normalizePath(getwd(), winslash = "/", mustWork = FALSE)
+  for (i in 1:6) {
+    if (dir.exists(file.path(cur, "data"))) return(cur)
+    nxt <- dirname(cur)
+    if (identical(nxt, cur)) break
+    cur <- nxt
+  }
+  cur
+}
+
+root_dir <- project_root()
+data_dir <- file.path(root_dir, "data")
+
+find_data <- function(pattern){
+  f <- list.files(data_dir, pattern = pattern, ignore.case = TRUE, full.names = TRUE)
+  if(length(f) == 0) stop("Archivo no encontrado: ", pattern, " en ", data_dir)
+  f[[1]]
+}
+
+# Cargar archivo de datos - Hipertensión 1
+file_hiper1 <- find_data("Hipertensi[oó]n\\.xlsx$|Hipertensi[oó]n1\\.xlsx$")
+
+# Leer la hoja "RM 1 y RM 2" con tipos de columnas específicos
+col_types <- c(rep("text", 3), rep("date", 2), "text", rep("numeric", 65), "text", "text")
+Hiper1 <- read_excel(file_hiper1, sheet = "RM 1 y RM 2", col_types = col_types)
+
+
+# Corregir nombres de columnas duplicadas
+names(Hiper1) <- make.unique(names(Hiper1), sep = " ")
+
+# =====================================================================
+# EXTRACCIÓN DEL SEXO A PARTIR DEL NOMBRE
+# =====================================================================
+
+extract_sex <- function(names_vector) {
+  names_upper <- toupper(trimws(names_vector))
+  
+  male_names <- c("JUAN", "JOSE", "PEDRO", "CARLOS", "LUIS", "JORGE", "ALBERTO", 
+                  "FRANCISCO", "ANTONIO", "MIGUEL", "MANUEL", "FERNANDO", "SERGIO",
+                  "RICARDO", "EDUARDO", "MARIO", "ROBERTO", "DANIEL", "PABLO",
+                  "ALEJANDRO", "ANDRES", "DIEGO", "RAFAEL", "RAMON", "VICTOR",
+                  "MARTIN", "RAUL", "OSCAR", "ALFONSO", "ARTURO", "ENRIQUE",
+                  "GERARDO", "HECTOR", "JAVIER", "JESUS", "MARCO", "OMAR")
+  
+  female_names <- c("MARIA", "ANA", "LAURA", "PATRICIA", "CARMEN", "ROSA", "SOFIA",
+                   "GABRIELA", "ELENA", "MARTHA", "LUCIA", "ANDREA", "ADRIANA",
+                   "MONICA", "TERESA", "CLAUDIA", "BEATRIZ", "SANDRA", "VERONICA",
+                   "ALEJANDRA", "LETICIA", "GLORIA", "ISABEL", "NORMA", "ALICIA",
+                   "SILVIA", "GUADALUPE", "BLANCA", "MARGARITA", "JULIA", "PAULA",
+                   "DANIELA", "CAROLINA", "NATALIA", "VALERIA", "FERNANDA")
+  
+  sex <- character(length(names_vector))
+  
+  for (i in seq_along(names_vector)) {
+    if (is.na(names_upper[i]) || names_upper[i] == "") {
+      sex[i] <- NA
+    } else {
+      first_name <- strsplit(names_upper[i], " ")[[1]][1]
+      
+      if (first_name %in% male_names) {
+        sex[i] <- "Male"
+      } else if (first_name %in% female_names) {
+        sex[i] <- "Female"
+      } else {
+        if (grepl("A$|E$", first_name)) {
+          sex[i] <- "Female"
+        } else if (grepl("O$|[^AEIOU]$", first_name)) {
+          sex[i] <- "Male"
+        } else {
+          sex[i] <- "Unknown"
+        }
+      }
+    }
+  }
+  
+  return(sex)
+}
+
+# Agregar sexo al dataframe
+Hiper1$Sex <- extract_sex(Hiper1$NOMBRE)
+Hiper1$Sex <- factor(Hiper1$Sex, levels = c("Female", "Male", "Unknown"))
+
+# =====================================================================
+# CREAR DATASET EXPANDIDO POR OJO
+# =====================================================================
+
+# Crear dataset largo con una fila por ojo para análisis de atrofia/Frisen
+Hiper1_eyes <- bind_rows(
+  Hiper1 %>% 
+    select(-`Frisen OI`, -`CV atrofia OI`) %>%
+    rename(Frisen = `Frisen OD`, `CV atrofia` = `CV atrofia OD`) %>%
+    mutate(Eye = "OD"),
+  Hiper1 %>% 
+    select(-`Frisen OD`, -`CV atrofia OD`) %>%
+    rename(Frisen = `Frisen OI`, `CV atrofia` = `CV atrofia OI`) %>%
+    mutate(Eye = "OI")
+)
+
+
+# =====================================================================
+# FUNCIONES AUXILIARES
+# =====================================================================
+
+# Función para limpiar nombres de columnas
+clean_names <- function(x) {
+  x <- gsub("\\(I\\)_", "", x)
+  x <- gsub("\\(II\\)_", "", x)
+  x <- gsub("_1$|_2$", "", x)
+  x <- gsub("_", " ", x)
+  x <- gsub("\\.\\.\\..*", "", x)
+  x <- trimws(x)
+  return(x)
+}
+
+# Función de traducción ampliada (CORREGIDA)
+translate_var <- function(x) {
+  translations <- c(
+    "Edad" = "Age",
+    "EDAD" = "Age",
+    "Sexo" = "Sex",
+    "Sex" = "Sex",
+    "Ancho del NO" = "ON width",
+    "Virchow Robin medida" = "Virchow Robin measurement",
+    "Ancho del Meckel" = "Meckel width",
+    "Circunferencia del Meckel" = "Meckel circumference",
+    "Ancho del 3ro" = "3rd ventricle width",
+    "Altura del Aracnoidocele" = "Arachnoidocele height",
+    "Descenso tonsilar cuantitativo" = "Quantitative tonsillar descent",
+    "Espesor del TCS nucal" = "Nuchal SCT thickness",
+    "Distancia talamomesencefalica" = "Thalamo-mesencephalic distance",
+    "Atrio" = "Atrium",
+    "VL frontal" = "Frontal VL",
+    "Tercer Ventriculo" = "Third Ventricle",
+    "Presión LCR" = "CSF Pressure",
+    "Tiempo sin ACTZ" = "Time without ACTZ",
+    "Válvula derivativa" = "Shunt valve",
+    "CV atrofia" = "ON atrophy",
+    "CV atrofia OD" = "ON atrophy RE",
+    "CV atrofia OI" = "ON atrophy LE",
+    "Frisen" = "Frisen Grade",
+    "Frisen OD" = "Frisen Grade RE",
+    "Frisen OI" = "Frisen Grade LE",
+    "Distención de vainas NO" = "ON sheath distention",
+    "Distención III NC" = "CN III distention",
+    "Distención  NC" = "CN distention",
+    "Aplanamiento posterior del globo" = "Posterior globe flattening",
+    "Protrusión del disco óptico" = "Optic disc protrusion",
+    "Realce del NO" = "ON enhancement",
+    "Meckel prominente" = "Prominent Meckel",
+    "Forma del Meckel" = "Meckel shape",
+    "Granulaciones Aracnoideas" = "Arachnoid granulations",
+    "Aracnoidocele Selar" = "Sellar arachnoidocele",
+    "Silla turca amplia aracnoidocele expansivo" = "Enlarged sella turcica with expansive arachnoidocele",  # CORREGIDA
+    "Silla turca amplia (aracnoidocele expansivo)" = "Enlarged sella turcica with expansive arachnoidocele", # AGREGADA
+    "Meningocele" = "Meningocele",
+    "Meningoencefalocele" = "Meningoencephalocele",
+    "Descenso tonsilar" = "Tonsillar descent",
+    "Estenosis seno sigmoideo" = "Sigmoid sinus stenosis",
+    "Cefalea crónica" = "Chronic headache",
+    "Otra Cx" = "Other surgery"
+  )
+  
+  for(old in names(translations)) {
+    x <- gsub(old, translations[old], x)
+  }
+  return(x)
+}
+
+# Función combinada para visualización
+clean_and_translate <- function(x) {
+  translate_var(clean_names(x))
+}
+
+# =====================================================================
+# TABLA 0: DESCRIPCIÓN COMPLETA DE LA MUESTRA BASAL (VERSIÓN MEJORADA)
+# Reemplazar la sección original de TABLA 0 con este código
+# =====================================================================
+
+# Función para formatear estadísticas continuas
+format_continuous <- function(data, var) {
+  vals <- na.omit(data[[var]])
+  if (length(vals) > 0) {
+    return(sprintf("%.2f ± %.2f", mean(vals), sd(vals)))
+  }
+  return("NA")
+}
+
+# Función para formatear estadísticas categóricas
+format_categorical <- function(data, var, category = "Present") {
+  if (is.factor(data[[var]]) || is.character(data[[var]])) {
+    tbl <- table(data[[var]])
+    n_total <- sum(tbl)
+    
+    if (category %in% names(tbl)) {
+      n <- tbl[category]
+      pct <- (n / n_total) * 100
+      return(sprintf("%d (%.1f)", n, pct))
+    } else if ("Female" %in% names(tbl)) {
+      # Para variable Sex, mostrar Female
+      n <- tbl["Female"]
+      pct <- (n / n_total) * 100
+      return(sprintf("%d (%.1f)", n, pct))
+    } else if ("Yes" %in% names(tbl)) {
+      n <- tbl["Yes"]
+      pct <- (n / n_total) * 100
+      return(sprintf("%d (%.1f)", n, pct))
+    } else if (length(tbl) > 0) {
+      # Para variables multiclase como Frisen, mostrar distribución completa
+      result <- paste(sprintf("%s: %d (%.1f)", 
+                             names(tbl), tbl, (tbl/n_total)*100), 
+                     collapse = "; ")
+      return(result)
+    }
+  }
+  return("NA")
+}
+
+# Preparar datos basales usando el dataset Hiper1 (a nivel paciente, no expandido)
+descriptive_data <- Hiper1 %>%
+  mutate(
+    # Variables demográficas y clínicas
+    Age = Edad,
+    CSF_Pressure = `Presión LCR`,
+    Time_without_ACTZ = `Tiempo sin ACTZ`,
+    
+    # Variables numéricas tiempo 1 (basales)
+    ON_width_T1 = `(I)_Ancho del NO`,
+    Virchow_Robin_T1 = `(I)_Virchow Robin medida`,
+    Meckel_width_T1 = `(I)_Ancho del Meckel`, 
+    Meckel_circumference_T1 = `(I)_Circunferencia del Meckel`,
+    Third_ventricle_width_T1 = `(I)_Ancho del 3ro`,
+    Arachnoidocele_height_T1 = `(I)_Altura del Aracnoidocele`,
+    Tonsillar_descent_T1 = `(I)_Descenso tonsilar cuantitativo`,
+    Nuchal_SCT_T1 = `(I)_Espesor del TCS nucal`,
+    Thalamo_mesencephalic_T1 = `(I)_Distancia talamomesencefalica`,
+    Atrium_T1 = `(I)_Atrio`,
+    Frontal_VL_T1 = `(I)_VL frontal`,
+    Third_ventricle_T1 = `(I)_Tercer Ventriculo`,
+    
+    # Variables de atrofia y grado por ojo
+    Shunt_valve = factor(`Válvula derivativa`, levels = c(1,2), labels = c("Yes", "No")),
+    ON_atrophy_OD = factor(`CV atrofia OD`, levels = c(1,2), labels = c("Present", "Absent")),
+    ON_atrophy_OI = factor(`CV atrofia OI`, levels = c(1,2), labels = c("Present", "Absent")),
+    Frisen_Grade_OD = factor(`Frisen OD`),
+    Frisen_Grade_OI = factor(`Frisen OI`),
+    Chronic_headache = factor(`Cefalea crónica`, levels = c(1,2), labels = c("Yes", "No")),
+    Other_surgery = factor(`Otra Cx`, levels = c(1,2), labels = c("Yes", "No")),
+    
+    # Variables categóricas tiempo 1
+    ON_sheath_distention_T1 = factor(`(I)_Distención de vainas NO`, levels = c(1,2), labels = c("Present", "Absent")),
+    CN_III_distention_T1 = factor(`(I)_Distención III NC`, levels = c(1,2), labels = c("Present", "Absent")),
+    Posterior_globe_flattening_T1 = factor(`(I)_Aplanamiento posterior del globo`, levels = c(1,2), labels = c("Present", "Absent")),
+    Optic_disc_protrusion_T1 = factor(`(I)_Protrusión del disco óptico`, levels = c(1,2), labels = c("Present", "Absent")),
+    ON_enhancement_T1 = factor(`(I)_Realce del NO`, levels = c(1,2), labels = c("Present", "Absent")),
+    Prominent_Meckel_T1 = factor(`(I)_Meckel prominente`, levels = c(1,2), labels = c("Present", "Absent")),
+    Meckel_shape_T1 = factor(`(I)_Forma del Meckel`, levels = c(1,2,3), labels = c("Type1", "Type2", "Type3")),
+    Arachnoid_granulations_T1 = factor(`(I)_Granulaciones Aracnoideas`, levels = c(1,2), labels = c("Present", "Absent")),
+    Meningocele_T1 = factor(`(I)_Meningocele`, levels = c(1,2), labels = c("Present", "Absent")),
+    Meningoencephalocele_T1 = factor(`(I)_Meningoencefalocele`, levels = c(1,2), labels = c("Present", "Absent")),
+    Sellar_arachnoidocele_T1 = factor(`(I)_Aracnoidocele Selar`, levels = c(1,2), labels = c("Present", "Absent")),
+    Enlarged_sella_T1 = factor(`(I)_Silla turca amplia aracnoidocele expansivo`, levels = c(1,2), labels = c("Present", "Absent")),
+    Tonsillar_descent_cat_T1 = factor(`(I)_Descenso tonsilar`, levels = c(1,2), labels = c("Present", "Absent")),
+    Sigmoid_stenosis_T1 = factor(`(I)_Estenosis seno sigmoideo`, levels = c(1,2), labels = c("Present", "Absent")),
+    Sex = Sex
+  )
+
+# Calcular n para cada grupo
+n_total <- nrow(descriptive_data)
+n_valve <- sum(descriptive_data$Shunt_valve == "Yes", na.rm = TRUE)
+n_no_valve <- sum(descriptive_data$Shunt_valve == "No", na.rm = TRUE)
+
+# Crear tabla descriptiva completa
+TABLA0_rows <- list()
+
+# Variables demográficas
+demo_vars <- list(
+  list(var = "Age", name = "Age (years)", cat = FALSE),
+  list(var = "Sex", name = "Sex (Female)", cat = TRUE),
+  list(var = "CSF_Pressure", name = "CSF Pressure (cmH2O)", cat = FALSE),
+  list(var = "Time_without_ACTZ", name = "Time without ACTZ (days)", cat = FALSE)
+)
+
+# Variables de imagen cuantitativas
+imaging_quant_vars <- list(
+  list(var = "ON_width_T1", name = "ON width (mm)", cat = FALSE),
+  list(var = "Virchow_Robin_T1", name = "Virchow Robin measurement (mm)", cat = FALSE),
+  list(var = "Meckel_width_T1", name = "Meckel width (mm)", cat = FALSE),
+  list(var = "Meckel_circumference_T1", name = "Meckel circumference (mm)", cat = FALSE),
+  list(var = "Third_ventricle_width_T1", name = "3rd ventricle width (mm)", cat = FALSE),
+  list(var = "Arachnoidocele_height_T1", name = "Arachnoidocele height (mm)", cat = FALSE),
+  list(var = "Tonsillar_descent_T1", name = "Tonsillar descent (mm)", cat = FALSE),
+  list(var = "Nuchal_SCT_T1", name = "Nuchal SCT thickness (mm)", cat = FALSE),
+  list(var = "Thalamo_mesencephalic_T1", name = "Thalamo-mesencephalic distance (mm)", cat = FALSE),
+  list(var = "Atrium_T1", name = "Atrium (mm)", cat = FALSE),
+  list(var = "Frontal_VL_T1", name = "Frontal VL (mm)", cat = FALSE),
+  list(var = "Third_ventricle_T1", name = "Third Ventricle (mm)", cat = FALSE)
+)
+
+# Variables de atrofia y grado por ojo
+atrophy_vars <- list(
+  list(var = "ON_atrophy_OD", name = "ON atrophy OD", cat = TRUE),
+  list(var = "ON_atrophy_OI", name = "ON atrophy OI", cat = TRUE),
+  list(var = "Frisen_Grade_OD", name = "Frisen Grade OD", cat = TRUE),
+  list(var = "Frisen_Grade_OI", name = "Frisen Grade OI", cat = TRUE),
+  list(var = "Chronic_headache", name = "Chronic headache", cat = TRUE),
+  list(var = "Other_surgery", name = "Other surgery", cat = TRUE)
+)
+
+# Variables de signos de imagen categóricas
+imaging_cat_vars <- list(
+  list(var = "ON_sheath_distention_T1", name = "ON sheath distention", cat = TRUE),
+  list(var = "CN_III_distention_T1", name = "CN III distention", cat = TRUE),
+  list(var = "Posterior_globe_flattening_T1", name = "Posterior globe flattening", cat = TRUE),
+  list(var = "Optic_disc_protrusion_T1", name = "Optic disc protrusion", cat = TRUE),
+  list(var = "ON_enhancement_T1", name = "ON enhancement", cat = TRUE),
+  list(var = "Prominent_Meckel_T1", name = "Prominent Meckel", cat = TRUE),
+  list(var = "Meckel_shape_T1", name = "Meckel shape", cat = TRUE),
+  list(var = "Arachnoid_granulations_T1", name = "Arachnoid granulations", cat = TRUE),
+  list(var = "Meningocele_T1", name = "Meningocele", cat = TRUE),
+  list(var = "Meningoencephalocele_T1", name = "Meningoencephalocele", cat = TRUE),
+  list(var = "Sellar_arachnoidocele_T1", name = "Sellar arachnoidocele", cat = TRUE),
+  list(var = "Enlarged_sella_T1", name = "Enlarged sella turcica", cat = TRUE),
+  list(var = "Tonsillar_descent_cat_T1", name = "Tonsillar descent (categorical)", cat = TRUE),
+  list(var = "Sigmoid_stenosis_T1", name = "Sigmoid sinus stenosis", cat = TRUE)
+)
+
+# Combinar todas las variables
+all_vars <- c(demo_vars, imaging_quant_vars, atrophy_vars, imaging_cat_vars)
+
+# Crear filas de la tabla
+for (v in all_vars) {
+  if (v$cat) {
+    # Variables categóricas
+    overall <- format_categorical(descriptive_data, v$var)
+    with_valve <- format_categorical(filter(descriptive_data, Shunt_valve == "Yes"), v$var)
+    without_valve <- format_categorical(filter(descriptive_data, Shunt_valve == "No"), v$var)
+    
+    # Test estadístico para categóricas
+    if (!grepl("Frisen", v$var)) {
+      tbl <- table(descriptive_data[[v$var]], descriptive_data$Shunt_valve)
+      if (nrow(tbl) > 0 && ncol(tbl) > 0) {
+        if (min(tbl) < 5) {
+          p_val <- fisher.test(tbl)$p.value
+        } else {
+          p_val <- suppressWarnings(chisq.test(tbl))$p.value
+        }
+      } else {
+        p_val <- NA
+      }
+    } else {
+      # Para Frisen Grade usar test no paramétrico
+      if (sum(!is.na(descriptive_data[[v$var]])) > 1) {
+        p_val <- kruskal.test(as.numeric(descriptive_data[[v$var]]) ~ descriptive_data$Shunt_valve)$p.value
+      } else {
+        p_val <- NA
+      }
+    }
+  } else {
+    # Variables continuas
+    overall <- format_continuous(descriptive_data, v$var)
+    with_valve <- format_continuous(filter(descriptive_data, Shunt_valve == "Yes"), v$var)
+    without_valve <- format_continuous(filter(descriptive_data, Shunt_valve == "No"), v$var)
+    
+    # Test t para continuas
+    if (sum(!is.na(descriptive_data[[v$var]])) > 1) {
+      p_val <- t.test(descriptive_data[[v$var]] ~ descriptive_data$Shunt_valve)$p.value
+    } else {
+      p_val <- NA
+    }
+  }
+  
+  TABLA0_rows[[length(TABLA0_rows) + 1]] <- data.frame(
+    Variable = v$name,
+    Overall = overall,
+    `With Valve` = with_valve,
+    `Without Valve` = without_valve,
+    `p value` = ifelse(is.na(p_val), "NA", sprintf("%.3f", p_val)),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+TABLA0_BASELINE <- bind_rows(TABLA0_rows)
+
+# Actualizar encabezados con números
+names(TABLA0_BASELINE) <- c("Variable", 
+                            paste0("Overall (n=", n_total, ")"),
+                            paste0("With Valve (n=", n_valve, ")"),
+                            paste0("Without Valve (n=", n_no_valve, ")"),
+                            "p value")
+
+
+# =====================================================================
+# ANÁLISIS 1: VARIABLES CONTINUAS PRE-POST (NIVEL PACIENTE)
+# =====================================================================
+
+# Seleccionar columnas para análisis pre-post
+HiperOrd <- Hiper1[,c(8,11,12,19,20,23:26,31,32,43,44,49:52,55:58,59:60,61:62,63,64,71)]
+
+# Verificar que las columnas sean numéricas (excepto la válvula)
+cols_to_check <- c(1:24, 26)
+for(col in cols_to_check) {
+  HiperOrd[,col] <- as.numeric(HiperOrd[[col]])
+}
+
+# Factorizar válvula derivativa
+HiperOrd$`Válvula derivativa` <- factor(HiperOrd$`Válvula derivativa`,
+                                        levels=c(1,2),
+                                        labels = c("Yes","No"))
+
+# Pruebas t pareadas y ANCOVA
+ANCOVAS <- list()
+TEMP <- list()
+TTEST <- list()
+
+for (i in seq(2,24,2)) {
+  ANCOVAS[[i]] <- aov(HiperOrd[[i+1]] ~ HiperOrd[[i]] + HiperOrd[["Válvula derivativa"]])
+  TEMP[[i]] <- summary(ANCOVAS[[i]])
+  TTEST[[i]] <- t.test(HiperOrd[[i]], HiperOrd[[i+1]], 
+                        paired = TRUE, alternative = "two.sided")
+}
+
+# Crear tabla de resultados
+TABLA1_rows <- list()
+
+for (i in seq(2,24,2)) {
+  var_name <- clean_and_translate(colnames(HiperOrd[,i]))
+  
+  vals_t1 <- as.numeric(HiperOrd[[i]])
+  mean1 <- mean(vals_t1, na.rm = TRUE)
+  sd1 <- sd(vals_t1, na.rm = TRUE)
+  t1_stats <- sprintf("%.2f ± %.2f", mean1, sd1)
+  
+  vals_t2 <- as.numeric(HiperOrd[[i+1]])
+  mean2 <- mean(vals_t2, na.rm = TRUE)
+  sd2 <- sd(vals_t2, na.rm = TRUE)
+  t2_stats <- sprintf("%.2f ± %.2f", mean2, sd2)
+  
+  valve_mask <- HiperOrd$`Válvula derivativa`=="Yes"
+  no_valve_mask <- HiperOrd$`Válvula derivativa`=="No"
+  
+  vals_valve <- vals_t2[valve_mask]
+  mean_valve <- mean(vals_valve, na.rm = TRUE)
+  sd_valve <- sd(vals_valve, na.rm = TRUE)
+  valve_stats <- sprintf("%.2f ± %.2f", mean_valve, sd_valve)
+  
+  vals_no_valve <- vals_t2[no_valve_mask]
+  mean_no_valve <- mean(vals_no_valve, na.rm = TRUE)
+  sd_no_valve <- sd(vals_no_valve, na.rm = TRUE)
+  no_valve_stats <- sprintf("%.2f ± %.2f", mean_no_valve, sd_no_valve)
+  
+  TABLA1_rows[[length(TABLA1_rows) + 1]] <- data.frame(
+    Variable = var_name,
+    `T1 (Mean ± SD)` = t1_stats,
+    `T2 (Mean ± SD)` = t2_stats,
+    `p value (Paired t)` = sprintf("%.4f", TTEST[[i]]$p.value),
+    `T2 with Valve` = valve_stats,
+    `T2 without Valve` = no_valve_stats,
+    `p value (ANCOVA)` = sprintf("%.4f", TEMP[[i]][[1]][2,5]),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+TABLA1 <- bind_rows(TABLA1_rows)
+
+# =====================================================================
+# ANÁLISIS 2: VARIABLES CATEGÓRICAS PRE-POST (NIVEL PACIENTE)
+# =====================================================================
+
+HiperOrd2 <- Hiper1[,c(9,10,13:18,21,22,27:30,33:36,37,39,41,42,45:48,53,54,64,66:70)]
+
+# Factorizar variables
+factorizar <- function(x) factor(x, levels=c(1,2), labels = c("Yes","No"))
+HiperOrd2 <- HiperOrd2 %>% mutate_at(c(1:10,13:30), factorizar)
+HiperOrd2.2 <- HiperOrd2[,c(1:10,13:30)]
+
+# Pruebas de McNemar
+MNT <- list()
+ODDS <- list()
+PROP1 <- list()
+PROP2 <- list()
+CHIT <- list()
+PROPVD <- list()
+ODDS2 <- list()
+
+for (i in seq(1,25,2)){
+  MNT[[i]] <- HiperOrd2.2[,c(i,i+1)]
+  PROP1[[i]] <- as.data.frame(prop.table(table(HiperOrd2.2[,i])))
+  PROP2[[i]] <- as.data.frame(prop.table(table(HiperOrd2.2[,i+1])))
+  ODDS[[i]] <- mcnemar.test(table(MNT[[i]]))
+  CHIT[[i]] <- HiperOrd2.2[,c(i+1,27)]
+  PROPVD[[i]] <- as.data.frame(prop.table(table(CHIT[[i]])))
+  ODDS2[[i]] <- suppressWarnings(chisq.test(table(CHIT[[i]])))
+}
+
+TABLA2_rows <- list()
+
+for (i in seq(1,25,2)) {
+  var_name <- clean_and_translate(colnames(HiperOrd2.2[,i]))
+  
+  tbl1 <- table(HiperOrd2.2[,i])
+  if ("Yes" %in% names(tbl1)) {
+    n1 <- tbl1["Yes"]
+    pct1 <- (n1 / sum(tbl1)) * 100
+    t1_stats <- sprintf("%d (%.1f)", n1, pct1)
+  } else {
+    t1_stats <- "0 (0.0)"
+  }
+  
+  tbl2 <- table(HiperOrd2.2[,i+1])
+  if ("Yes" %in% names(tbl2)) {
+    n2 <- tbl2["Yes"]
+    pct2 <- (n2 / sum(tbl2)) * 100
+    t2_stats <- sprintf("%d (%.1f)", n2, pct2)
+  } else {
+    t2_stats <- "0 (0.0)"
+  }
+  
+  tbl_valve <- table(HiperOrd2.2[HiperOrd2.2$`Válvula derivativa`=="Yes", i+1])
+  tbl_no_valve <- table(HiperOrd2.2[HiperOrd2.2$`Válvula derivativa`=="No", i+1])
+  
+  if ("Yes" %in% names(tbl_valve)) {
+    n_valve <- tbl_valve["Yes"]
+    pct_valve <- (n_valve / sum(tbl_valve)) * 100
+    valve_stats <- sprintf("%d (%.1f)", n_valve, pct_valve)
+  } else {
+    valve_stats <- "0 (0.0)"
+  }
+  
+  if ("Yes" %in% names(tbl_no_valve)) {
+    n_no_valve <- tbl_no_valve["Yes"]
+    pct_no_valve <- (n_no_valve / sum(tbl_no_valve)) * 100
+    no_valve_stats <- sprintf("%d (%.1f)", n_no_valve, pct_no_valve)
+  } else {
+    no_valve_stats <- "0 (0.0)"
+  }
+  
+  TABLA2_rows[[length(TABLA2_rows) + 1]] <- data.frame(
+    Variable = var_name,
+    `T1 n (%)` = t1_stats,
+    `T2 n (%)` = t2_stats,
+    `p value (McNemar)` = sprintf("%.4f", ODDS[[i]]$p.value),
+    `T2 with Valve n (%)` = valve_stats,
+    `T2 without Valve n (%)` = no_valve_stats,
+    `p value (Chi-square)` = sprintf("%.4f", ODDS2[[i]]$p.value),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+TABLA2 <- bind_rows(TABLA2_rows)
+
+# =====================================================================
+# ANÁLISIS 3: ANÁLISIS DE ATROFIA (TODOS LOS OJOS COMO UNIDADES)
+# =====================================================================
+
+# Preparar datos para análisis de atrofia - todos los ojos juntos
+DATOSM <- Hiper1[,c(8,9,seq(11,61,2),63:71)]
+DATOSM <- DATOSM[,-17]
+
+# Recodificar y factorizar variables categóricas
+DATOSM <- DATOSM %>% 
+  mutate_at(c(2,4,5,6,8,11,12,14,15,16,17,19,20,23,29,31,33), 
+            list(~recode(., `2`=0)))
+
+DATOSM <- DATOSM %>% 
+  mutate_at(c(2,4,5,6,8,11,12,14,15,16,17,19,20,23,29,31,33), 
+            list(~factor(., levels = c(0,1), labels = c("Absent","Present"))))
+
+colnames(DATOSM) <- gsub('\\(I\\)_','', colnames(DATOSM))
+
+# Expandir datos para análisis por ojo
+DATOSM_all_eyes <- Hiper1_eyes %>%
+  select(Edad = Edad, `Ancho del NO` = `(I)_Ancho del NO`,
+         `Ancho del 3ro` = `(I)_Ancho del 3ro`,
+         `Virchow Robin medida` = `(I)_Virchow Robin medida`,
+         `Ancho del Meckel` = `(I)_Ancho del Meckel`,
+         `Circunferencia del Meckel` = `(I)_Circunferencia del Meckel`,
+         `Altura del Aracnoidocele` = `(I)_Altura del Aracnoidocele`,
+         `Descenso tonsilar cuantitativo` = `(I)_Descenso tonsilar cuantitativo`,
+         `Espesor del TCS nucal` = `(I)_Espesor del TCS nucal`,
+         `Distancia talamomesencefalica` = `(I)_Distancia talamomesencefalica`,
+         `Atrio` = `(I)_Atrio`,
+         `VL frontal` = `(I)_VL frontal`,
+         `Tercer Ventriculo` = `(I)_Tercer Ventriculo`,
+         `Presión LCR` = `Presión LCR`,
+         `CV atrofia`,
+         Frisen) %>%
+  mutate(
+    `CV atrofia` = factor(`CV atrofia`, levels = c(2,1), labels = c("Absent","Present"))
+  )
+
+# Análisis comparativo usando todos los ojos
+TABLA3_rows <- list()
+
+vars_to_test <- c("Edad", "Ancho del NO", "Ancho del 3ro", "Virchow Robin medida",
+                  "Ancho del Meckel", "Circunferencia del Meckel", 
+                  "Altura del Aracnoidocele", "Descenso tonsilar cuantitativo",
+                  "Espesor del TCS nucal", "Distancia talamomesencefalica",
+                  "Atrio", "VL frontal", "Tercer Ventriculo", "Presión LCR")
+
+for (var in vars_to_test) {
+  var_name <- clean_and_translate(var)
+  
+  absent_data <- DATOSM_all_eyes %>% filter(`CV atrofia` == "Absent") %>% pull(!!var)
+  mean_absent <- mean(absent_data, na.rm = TRUE)
+  sd_absent <- sd(absent_data, na.rm = TRUE)
+  n_absent <- sum(!is.na(absent_data))
+  absent_stats <- sprintf("%.2f ± %.2f", mean_absent, sd_absent)
+  
+  present_data <- DATOSM_all_eyes %>% filter(`CV atrofia` == "Present") %>% pull(!!var)
+  mean_present <- mean(present_data, na.rm = TRUE)
+  sd_present <- sd(present_data, na.rm = TRUE)
+  n_present <- sum(!is.na(present_data))
+  present_stats <- sprintf("%.2f ± %.2f", mean_present, sd_present)
+  
+  if(n_absent > 1 && n_present > 1) {
+    t_test <- t.test(absent_data, present_data)
+    w_test <- wilcox.test(absent_data, present_data)
+    t_p <- sprintf("%.4f", t_test$p.value)
+    w_p <- sprintf("%.4f", w_test$p.value)
+  } else {
+    t_p <- "NA"
+    w_p <- "NA"
+  }
+  
+  TABLA3_rows[[length(TABLA3_rows) + 1]] <- data.frame(
+    Variable = var_name,
+    `Absent (Mean ± SD)` = absent_stats,
+    `Present (Mean ± SD)` = present_stats,
+    `n (Absent/Present)` = sprintf("%d/%d", n_absent, n_present),
+    `p value (t-test)` = t_p,
+    `p value (Wilcoxon)` = w_p,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+TABLA3_atrophy <- bind_rows(TABLA3_rows)
+
+# ANÁLISIS 4: CORRELACIONES CON FRISEN (TODOS LOS OJOS)
+TABLA4_rows <- list()
+
+for (var in vars_to_test) {
+  var_name <- clean_and_translate(var)
+  
+  spear_test <- cor.test(as.numeric(DATOSM_all_eyes$Frisen), 
+                         DATOSM_all_eyes[[var]], 
+                         method = "spearman", use = "complete.obs")
+  
+  # Ya no necesitamos contar n_valid porque será fijo en el título
+  
+  TABLA4_rows[[length(TABLA4_rows) + 1]] <- data.frame(
+    Variable = var_name,
+    `Spearman rho` = sprintf("%.3f", spear_test$estimate),
+    `p value` = sprintf("%.4f", spear_test$p.value),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+TABLA4_frisen <- bind_rows(TABLA4_rows)
+
+# =====================================================================
+# ANÁLISIS 5: VARIABLES CATEGÓRICAS CON ATROFIA (TODOS LOS OJOS)
+# =====================================================================
+
+# Preparar datos categóricos expandidos
+DATOSM3_eyes <- Hiper1_eyes %>%
+  mutate(
+    `CV atrofia` = factor(`CV atrofia`, levels = c(1,2), labels = c("Present","Absent")),
+    `Distención de vainas NO` = factor(`(I)_Distención de vainas NO`, 
+                                       levels = c(1,2), labels = c("Present","Absent")),
+    `Aplanamiento posterior del globo` = factor(`(I)_Aplanamiento posterior del globo`, 
+                                                levels = c(1,2), labels = c("Present","Absent")),
+    `Protrusión del disco óptico` = factor(`(I)_Protrusión del disco óptico`, 
+                                           levels = c(1,2), labels = c("Present","Absent")),
+    `Realce del NO` = factor(`(I)_Realce del NO`, 
+                             levels = c(1,2), labels = c("Present","Absent")),
+    `Meckel prominente` = factor(`(I)_Meckel prominente`, 
+                                 levels = c(1,2), labels = c("Present","Absent")),
+    `Distención III NC` = factor(`(I)_Distención III NC`, 
+                                 levels = c(1,2), labels = c("Present","Absent")),
+    `Granulaciones Aracnoideas` = factor(`(I)_Granulaciones Aracnoideas`, 
+                                         levels = c(1,2), labels = c("Present","Absent")),
+    `Meningocele` = factor(`(I)_Meningocele`, 
+                           levels = c(1,2), labels = c("Present","Absent")),
+    `Meningoencefalocele` = factor(`(I)_Meningoencefalocele`, 
+                                   levels = c(1,2), labels = c("Present","Absent")),
+    `Aracnoidocele Selar` = factor(`(I)_Aracnoidocele Selar`, 
+                                   levels = c(1,2), labels = c("Present","Absent")),
+    `Silla turca amplia aracnoidocele expansivo` = factor(`(I)_Silla turca amplia aracnoidocele expansivo`, 
+                                  levels = c(1,2), labels = c("Present","Absent")),
+    `Descenso tonsilar` = factor(`(I)_Descenso tonsilar`, 
+                                 levels = c(1,2), labels = c("Present","Absent")),
+    `Estenosis seno sigmoideo` = factor(`(I)_Estenosis seno sigmoideo`, 
+                                        levels = c(1,2), labels = c("Present","Absent"))
+  )
+
+cat_vars <- c("Distención de vainas NO", "Aplanamiento posterior del globo",
+              "Protrusión del disco óptico", "Realce del NO", "Meckel prominente",
+              "Distención III NC", "Granulaciones Aracnoideas", "Meningocele",
+              "Meningoencefalocele", "Aracnoidocele Selar", "Silla turca amplia aracnoidocele expansivo",
+              "Descenso tonsilar", "Estenosis seno sigmoideo")
+
+TABLA5_rows <- list()
+
+for (var in cat_vars) {
+  var_name <- clean_and_translate(var)
+  
+  tbl <- table(DATOSM3_eyes[[var]], DATOSM3_eyes$`CV atrofia`)
+  
+  if(nrow(tbl) >= 2 && ncol(tbl) >= 2) {
+    n_no_atrophy <- tbl[1,2]
+    total_no_atrophy <- sum(tbl[,2])
+    pct_no_atrophy <- (n_no_atrophy / total_no_atrophy) * 100
+    no_atrophy_stats <- sprintf("%d/%d (%.1f)", n_no_atrophy, total_no_atrophy, pct_no_atrophy)
+    
+    n_atrophy <- tbl[1,1]
+    total_atrophy <- sum(tbl[,1])
+    pct_atrophy <- (n_atrophy / total_atrophy) * 100
+    atrophy_stats <- sprintf("%d/%d (%.1f)", n_atrophy, total_atrophy, pct_atrophy)
+    
+    or_result <- suppressWarnings(suppressMessages(oddsratio.fisher(tbl)))
+    or_val <- or_result$measure[2,1]
+    or_lower <- or_result$measure[2,2]
+    or_upper <- or_result$measure[2,3]
+    or_stats <- sprintf("%.2f (%.2f-%.2f)", or_val, or_lower, or_upper)
+    
+    p_val <- or_result$p.value[2,2]
+  } else {
+    no_atrophy_stats <- "NA"
+    atrophy_stats <- "NA"
+    or_stats <- "NA"
+    p_val <- NA
+  }
+  
+  TABLA5_rows[[length(TABLA5_rows) + 1]] <- data.frame(
+    Variable = var_name,
+    `No Atrophy n/N (%)` = no_atrophy_stats,
+    `Atrophy n/N (%)` = atrophy_stats,
+    `OR (95% CI)` = or_stats,
+    `p value` = ifelse(is.na(p_val), "NA", sprintf("%.4f", p_val)),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+TABLA5_cat <- bind_rows(TABLA5_rows)
+
+# =====================================================================
+# ANÁLISIS 6: REGRESIÓN LOGÍSTICA (TODOS LOS OJOS)
+# =====================================================================
+
+m_all_eyes <- glm(`CV atrofia` ~ Edad + `Ancho del 3ro` + 
+                  `Distancia talamomesencefalica` + `Presión LCR`, 
+                  data = DATOSM_all_eyes, family = binomial)
+
+coefs <- coef(m_all_eyes)
+se <- summary(m_all_eyes)$coefficients[,2]
+z_vals <- summary(m_all_eyes)$coefficients[,3]
+p_vals <- summary(m_all_eyes)$coefficients[,4]
+or_vals <- exp(coefs)
+conf_int <- suppressWarnings(exp(confint(m_all_eyes)))
+
+TABLA6_rows <- list()
+
+for (i in 1:length(coefs)) {
+  var_name <- clean_and_translate(names(coefs)[i])
+  
+  TABLA6_rows[[length(TABLA6_rows) + 1]] <- data.frame(
+    Variable = var_name,
+    `Beta (SE)` = sprintf("%.3f (%.3f)", coefs[i], se[i]),
+    `OR (95% CI)` = sprintf("%.3f (%.3f-%.3f)", or_vals[i], conf_int[i,1], conf_int[i,2]),
+    `z value` = sprintf("%.3f", z_vals[i]),
+    `p value` = sprintf("%.4f", p_vals[i]),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+TABLA6_regression <- bind_rows(TABLA6_rows)
+
+# =====================================================================
+# ANÁLISIS 7: CURVAS ROC (TODOS LOS OJOS)
+# =====================================================================
+
+roc_csf <- roc(DATOSM_all_eyes$`CV atrofia`, DATOSM_all_eyes$`Presión LCR`, 
+               auc=TRUE, ci=TRUE)
+roc_thalamo <- roc(DATOSM_all_eyes$`CV atrofia`, DATOSM_all_eyes$`Distancia talamomesencefalica`, 
+                   auc=TRUE, ci=TRUE)
+
+coords_csf <- coords(roc_csf, "best")
+coords_thalamo <- coords(roc_thalamo, "best")
+
+TABLA7_roc <- data.frame(
+  Variable = c("CSF Pressure", "Thalamo-mesencephalic distance"),
+  `AUC (95% CI)` = c(
+    sprintf("%.3f (%.3f-%.3f)", roc_csf$auc, roc_csf$ci[1], roc_csf$ci[3]),
+    sprintf("%.3f (%.3f-%.3f)", roc_thalamo$auc, roc_thalamo$ci[1], roc_thalamo$ci[3])
+  ),
+  `Optimal Cutoff` = c(
+    sprintf("%.1f", coords_csf$threshold),
+    sprintf("%.1f", coords_thalamo$threshold)
+  ),
+  `Sensitivity/Specificity` = c(
+    sprintf("%.1f/%.1f", coords_csf$sensitivity*100, coords_csf$specificity*100),
+    sprintf("%.1f/%.1f", coords_thalamo$sensitivity*100, coords_thalamo$specificity*100)
+  ),
+  stringsAsFactors = FALSE,
+  check.names = FALSE
+)
+
+# =====================================================================
+# CREAR DATATABLES INTERACTIVAS
+# =====================================================================
+
+# Crear DataTable interactiva
+dt0 <- datatable(TABLA0_BASELINE,
+  caption = "Table 0: Complete Baseline Characteristics of Study Sample",
+  extensions = c('Buttons', 'FixedColumns'),
+  options = list(
+    dom = 'Bfrtip',
+    buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+    scrollX = TRUE,
+    fixedColumns = list(leftColumns = 1),
+    pageLength = 50
+  ),
+  rownames = FALSE
+) %>%
+  formatStyle(columns = 5,
+              backgroundColor = styleInterval(0.05, c('lightcoral', 'white')))
+
+# Tabla 1: Variables continuas Pre-Post
+dt1 <- datatable(TABLA1,
+  caption = "Table 1: Pre-Post Analysis of Continuous Variables (Patient-level)",
+  extensions = c('Buttons', 'FixedColumns'),
+  options = list(
+    dom = 'Bfrtip',
+    buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+    scrollX = TRUE,
+    fixedColumns = list(leftColumns = 1),
+    pageLength = 15
+  ),
+  rownames = FALSE
+) %>%
+  formatStyle(columns = c(4, 7),
+              backgroundColor = styleInterval(0.05, c('lightcoral', 'white')))
+
+# Tabla 2: Variables categóricas Pre-Post
+dt2 <- datatable(TABLA2,
+  caption = "Table 2: Pre-Post Analysis of Categorical Variables (Patient-level)",
+  extensions = c('Buttons', 'FixedColumns'),
+  options = list(
+    dom = 'Bfrtip',
+    buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+    scrollX = TRUE,
+    fixedColumns = list(leftColumns = 1),
+    pageLength = 15
+  ),
+  rownames = FALSE
+) %>%
+  formatStyle(columns = c(4, 7),
+              backgroundColor = styleInterval(0.05, c('lightcoral', 'white')))
+
+# Tabla 3: Análisis de atrofia
+dt3 <- datatable(TABLA3_atrophy,
+  caption = "Table 3: Continuous Variables by ON Atrophy Status (All Eyes as Units)",
+  extensions = c('Buttons', 'FixedColumns'),
+  options = list(
+    dom = 'Bfrtip',
+    buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+    scrollX = TRUE,
+    fixedColumns = list(leftColumns = 1),
+    pageLength = 15
+  ),
+  rownames = FALSE
+) %>%
+  formatStyle(columns = c(5, 6),
+              backgroundColor = styleInterval(0.05, c('lightcoral', 'white')))
+
+# Crear DataTable con n=42 en el título
+dt4 <- datatable(TABLA4_frisen,
+  caption = "Table 4: Spearman Correlations with Frisen Grade (All Eyes, n=42)",  # n=42 en el título
+  extensions = c('Buttons'),
+  options = list(
+    dom = 'Bfrtip',
+    buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+    pageLength = 15
+  ),
+  rownames = FALSE
+) %>%
+  formatStyle(columns = 3,  # Ahora la columna p-value es la 3 en lugar de la 4
+              backgroundColor = styleInterval(0.05, c('lightcoral', 'white')))
+
+# Tabla 5: Variables categóricas con atrofia
+dt5 <- datatable(TABLA5_cat,
+  caption = "Table 5: Categorical Variables by ON Atrophy Status (All Eyes as Units)",
+  extensions = c('Buttons', 'FixedColumns'),
+  options = list(
+    dom = 'Bfrtip',
+    buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+    scrollX = TRUE,
+    fixedColumns = list(leftColumns = 1),
+    pageLength = 15
+  ),
+  rownames = FALSE
+) %>%
+  formatStyle(columns = 5,
+              backgroundColor = styleInterval(0.05, c('lightcoral', 'white')))
+
+# Tabla 6: Regresión logística
+dt6 <- datatable(TABLA6_regression,
+  caption = "Table 6: Logistic Regression Model for ON Atrophy (All Eyes as Units)",
+  extensions = c('Buttons'),
+  options = list(
+    dom = 'Bfrtip',
+    buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+    pageLength = 10
+  ),
+  rownames = FALSE
+) %>%
+  formatStyle(columns = 5,
+              backgroundColor = styleInterval(0.05, c('lightcoral', 'white')))
+
+# Tabla 7: Análisis ROC
+dt7 <- datatable(TABLA7_roc,
+  caption = "Table 7: ROC Curve Analysis for ON Atrophy Prediction (All Eyes as Units)",
+  extensions = c('Buttons'),
+  options = list(
+    dom = 'Bfrtip',
+    buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+    pageLength = 10
+  ),
+  rownames = FALSE
+)
+
+# Mostrar tablas
+dt0
+dt1
+dt2
+dt3
+dt4
+dt5
+dt6
+dt7
 ```
 
+
+```{r}
+# =====================================================================
+# CREAR FIGURAS
+# =====================================================================
+# =====================================================================
+# FIGURA 1 CORREGIDA - USANDO DIRECTAMENTE DATOS DE TABLA 1
+# =====================================================================
+
+# Primero, vamos a recrear la Tabla 1 para tener los valores exactos
+# y luego usarlos directamente para la figura
+
+# PASO 1: Recalcular Tabla 1 para asegurar consistencia
+HiperOrd <- Hiper1[,c(8,11,12,19,20,23:26,31,32,43,44,49:52,55:58,59:60,61:62,63,64,71)]
+
+# Convertir a numérico
+cols_to_check <- c(1:24, 26)
+for(col in cols_to_check) {
+  HiperOrd[,col] <- as.numeric(HiperOrd[[col]])
+}
+
+# Factorizar válvula derivativa
+HiperOrd$`Válvula derivativa` <- factor(HiperOrd$`Válvula derivativa`,
+                                        levels=c(1,2),
+                                        labels = c("Yes","No"))
+
+# PASO 2: Crear dataframe para gráfico directamente desde los cálculos
+plot_data <- data.frame()
+
+# Variables a incluir (índices de columnas en pares)
+var_pairs <- seq(2,24,2)
+var_names <- c("ON width", "Virchow Robin measurement", "Meckel width",
+               "Meckel circumference", "3rd ventricle width", "Arachnoidocele height",
+               "Quantitative tonsillar descent", "Nuchal SCT thickness",
+               "Thalamo-mesencephalic distance", "Atrium", "Frontal VL", "Third Ventricle")
+
+for(i in 1:length(var_pairs)) {
+  idx <- var_pairs[i]
+  
+  # T1 - Overall
+  vals_t1 <- as.numeric(HiperOrd[[idx]])
+  mean_t1 <- mean(vals_t1, na.rm = TRUE)
+  sd_t1 <- sd(vals_t1, na.rm = TRUE)
+  n_t1 <- sum(!is.na(vals_t1))
+  se_t1 <- sd_t1/sqrt(n_t1)
+  
+  # T2 - Overall
+  vals_t2 <- as.numeric(HiperOrd[[idx+1]])
+  mean_t2 <- mean(vals_t2, na.rm = TRUE)
+  sd_t2 <- sd(vals_t2, na.rm = TRUE)
+  n_t2 <- sum(!is.na(vals_t2))
+  se_t2 <- sd_t2/sqrt(n_t2)
+  
+  # T2 - With Valve
+  valve_mask <- HiperOrd$`Válvula derivativa` == "Yes"
+  vals_t2_valve <- vals_t2[valve_mask]
+  mean_t2_valve <- mean(vals_t2_valve, na.rm = TRUE)
+  sd_t2_valve <- sd(vals_t2_valve, na.rm = TRUE)
+  n_t2_valve <- sum(!is.na(vals_t2_valve))
+  se_t2_valve <- sd_t2_valve/sqrt(n_t2_valve)
+  
+  # T2 - Without Valve
+  no_valve_mask <- HiperOrd$`Válvula derivativa` == "No"
+  vals_t2_no_valve <- vals_t2[no_valve_mask]
+  mean_t2_no_valve <- mean(vals_t2_no_valve, na.rm = TRUE)
+  sd_t2_no_valve <- sd(vals_t2_no_valve, na.rm = TRUE)
+  n_t2_no_valve <- sum(!is.na(vals_t2_no_valve))
+  se_t2_no_valve <- sd_t2_no_valve/sqrt(n_t2_no_valve)
+  
+  # Para el gráfico, necesitamos T1 y T2 para cada grupo
+  # Asumiendo que T1 es igual para ambos grupos (pre-tratamiento)
+  # Necesitamos T1 para cada grupo
+  vals_t1_valve <- vals_t1[valve_mask]
+  mean_t1_valve <- mean(vals_t1_valve, na.rm = TRUE)
+  sd_t1_valve <- sd(vals_t1_valve, na.rm = TRUE)
+  n_t1_valve <- sum(!is.na(vals_t1_valve))
+  se_t1_valve <- sd_t1_valve/sqrt(n_t1_valve)
+  
+  vals_t1_no_valve <- vals_t1[no_valve_mask]
+  mean_t1_no_valve <- mean(vals_t1_no_valve, na.rm = TRUE)
+  sd_t1_no_valve <- sd(vals_t1_no_valve, na.rm = TRUE)
+  n_t1_no_valve <- sum(!is.na(vals_t1_no_valve))
+  se_t1_no_valve <- sd_t1_no_valve/sqrt(n_t1_no_valve)
+  
+  # Agregar datos al dataframe
+  # Grupo con válvula
+  plot_data <- rbind(plot_data,
+    data.frame(
+      Variable = var_names[i],
+      Treatment = "Surgical Treatment",
+      Time = "Pre",
+      Mean = mean_t1_valve,
+      SD = sd_t1_valve,
+      SE = se_t1_valve,
+      n = n_t1_valve
+    ),
+    data.frame(
+      Variable = var_names[i],
+      Treatment = "Surgical Treatment",
+      Time = "Post",
+      Mean = mean_t2_valve,
+      SD = sd_t2_valve,
+      SE = se_t2_valve,
+      n = n_t2_valve
+    ),
+    # Grupo sin válvula
+    data.frame(
+      Variable = var_names[i],
+      Treatment = "Medical Treatment",
+      Time = "Pre",
+      Mean = mean_t1_no_valve,
+      SD = sd_t1_no_valve,
+      SE = se_t1_no_valve,
+      n = n_t1_no_valve
+    ),
+    data.frame(
+      Variable = var_names[i],
+      Treatment = "Medical Treatment",
+      Time = "Post",
+      Mean = mean_t2_no_valve,
+      SD = sd_t2_no_valve,
+      SE = se_t2_no_valve,
+      n = n_t2_no_valve
+    )
+  )
+}
+
+# Calcular intervalos de confianza al 95%
+plot_data$CI_lower <- plot_data$Mean - 1.96 * plot_data$SE
+plot_data$CI_upper <- plot_data$Mean + 1.96 * plot_data$SE
+
+# Factorizar variables para el gráfico
+plot_data$Time <- factor(plot_data$Time, levels = c("Pre", "Post"))
+plot_data$Treatment <- factor(plot_data$Treatment, 
+                              levels = c("Surgical Treatment", "Medical Treatment"))
+
+
+# PASO 4: Crear la figura con los valores correctos
+library(ggplot2)
+
+# Variables seleccionadas para mostrar
+selected_vars <- c("ON width", "3rd ventricle width", "Arachnoidocele height",
+                  "Quantitative tonsillar descent", "Nuchal SCT thickness",
+                  "Thalamo-mesencephalic distance", "Atrium", "Third Ventricle")
+
+p1 <- plot_data %>% 
+  filter(Variable %in% selected_vars) %>%
+  ggplot(aes(x = Time, y = Mean, group = Treatment, color = Treatment, 
+            linetype = Treatment, shape = Treatment)) +
+  geom_line(linewidth = 0.8, alpha = 0.7) + 
+  geom_point(size = 3, alpha = 0.9) +
+  geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper), 
+                width = 0.1, alpha = 0.6, linewidth = 0.6) + 
+  scale_color_manual(values = c("Surgical Treatment" = "black", 
+                               "Medical Treatment" = "grey50")) +
+  scale_linetype_manual(values = c("Surgical Treatment" = "solid", 
+                                   "Medical Treatment" = "longdash")) +
+  scale_shape_manual(values = c("Surgical Treatment" = 16, 
+                                "Medical Treatment" = 17)) +
+  theme_minimal() +
+  ylab("Mean ± 95% CI (mm)") +
+  xlab("Time") +
+  theme(
+    legend.position = "top",
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(size = 10, face = "bold"),
+    axis.text = element_text(size = 9),
+    axis.title = element_text(size = 10),
+    legend.text = element_text(size = 10)
+  ) +
+  facet_wrap(~ Variable, scales = "free_y", ncol = 2) +
+  labs(
+    color = "Treatment Type:",
+    linetype = "Treatment Type:",
+    shape = "Treatment Type:",
+    title = "Evolution of MRI Parameters by Treatment Group",
+    subtitle = "Pre-Post Comparison with 95% Confidence Intervals"
+  )
+
+# Guardar figura
+ggsave("figure1.png", p1, 
+       width = 12, height = 10, device = 'png', dpi = 300, bg = "white")
+
+
+# Figura 2: Boxplots para atrofia del NO (todos los ojos)
+library(ggpubr)
+compara_pares <- list(c("Absent", "Present"))
+
+fig2a <- ggboxplot(DATOSM_all_eyes,
+          x = "CV atrofia",
+          y = "Descenso tonsilar cuantitativo",
+          color = "CV atrofia",
+          palette = c("grey50", "grey10"),
+          shape = "CV atrofia",
+          add = "jitter",
+          add.params = list(alpha = 0.3)) +
+  stat_compare_means(comparisons = compara_pares, method = "wilcox.test") + 
+  xlab("ON Atrophy") + 
+  ylab("Quantitative tonsillar descent (mm)") + 
+  theme_minimal() + 
+  theme(legend.position="none")
+
+fig2b <- ggboxplot(DATOSM_all_eyes,
+          x = "CV atrofia",
+          y = "Distancia talamomesencefalica",
+          color = "CV atrofia",
+          palette = c("grey50", "grey10"),
+          shape = "CV atrofia",
+          add = "jitter",
+          add.params = list(alpha = 0.3)) +
+  stat_compare_means(comparisons = compara_pares, method = "wilcox.test") + 
+  xlab("ON Atrophy") + 
+  ylab("Thalamo-mesencephalic distance (mm)") + 
+  theme_minimal() + 
+  theme(legend.position="none")
+
+fig2c <- ggboxplot(DATOSM_all_eyes,
+          x = "CV atrofia",
+          y = "Presión LCR",
+          color = "CV atrofia",
+          palette = c("grey50", "grey10"),
+          shape = "CV atrofia",
+          add = "jitter",
+          add.params = list(alpha = 0.3)) +
+  stat_compare_means(comparisons = compara_pares, method = "t.test") + 
+  xlab("ON Atrophy") + 
+  ylab("CSF Pressure (cmH2O)") + 
+  theme_minimal() + 
+  theme(legend.position="none")
+
+fig2d <- ggboxplot(DATOSM_all_eyes,
+          x = "CV atrofia",
+          y = "Atrio",
+          color = "CV atrofia",
+          palette = c("grey50", "grey10"),
+          shape = "CV atrofia",
+          add = "jitter",
+          add.params = list(alpha = 0.3)) +
+  stat_compare_means(comparisons = compara_pares, method = "wilcox.test") + 
+  xlab("ON Atrophy") + 
+  ylab("Atrium (mm)") + 
+  theme_minimal() + 
+  theme(legend.position="none")
+
+p2 <- ggarrange(fig2a, fig2b, fig2c, fig2d, ncol = 2, nrow = 2)
+ggsave("figure2.png", p2, width = 10, height = 10, 
+       device='png', dpi=300)
+
+# Figura 3: Curvas ROC
+library(ggplot2)
+roc_csf_df <- data.frame(
+  sensitivity = roc_csf$sensitivities,
+  specificity = roc_csf$specificities,
+  FPR = 1 - roc_csf$specificities
+)
+
+roc_thalamo_df <- data.frame(
+  sensitivity = roc_thalamo$sensitivities,
+  specificity = roc_thalamo$specificities,
+  FPR = 1 - roc_thalamo$specificities
+)
+
+optimal_csf <- coords(roc_csf, "best")
+optimal_thalamo <- coords(roc_thalamo, "best")
+
+fig3a <- ggplot(roc_csf_df, aes(x = FPR, y = sensitivity)) +
+  geom_line(color = "darkblue", linewidth = 1.2) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray50") +
+  geom_point(aes(x = 1 - optimal_csf$specificity, y = optimal_csf$sensitivity),
+            color = "red", size = 4, shape = 16) +
+  annotate("text", x = 0.6, y = 0.3,
+          label = paste0("AUC = ", round(roc_csf$auc, 3),
+                        "\nCI: ", round(roc_csf$ci[1], 3), "-", 
+                        round(roc_csf$ci[3], 3),
+                        "\nOptimal cutoff: ", round(optimal_csf$threshold, 2)),
+          size = 3.5, hjust = 0) +
+  labs(title = "ROC Curve: CSF Pressure for ON Atrophy Prediction",
+       x = "False Positive Rate (1 - Specificity)",
+       y = "Sensitivity") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 11, face = "bold"),
+        panel.grid.minor = element_blank()) +
+  coord_equal()
+
+fig3b <- ggplot(roc_thalamo_df, aes(x = FPR, y = sensitivity)) +
+  geom_line(color = "darkred", linewidth = 1.2) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray50") +
+  geom_point(aes(x = 1 - optimal_thalamo$specificity, y = optimal_thalamo$sensitivity),
+            color = "red", size = 4, shape = 16) +
+  annotate("text", x = 0.6, y = 0.3,
+          label = paste0("AUC = ", round(roc_thalamo$auc, 3),
+                        "\nCI: ", round(roc_thalamo$ci[1], 3), "-", 
+                        round(roc_thalamo$ci[3], 3),
+                        "\nOptimal cutoff: ", round(optimal_thalamo$threshold, 2)),
+          size = 3.5, hjust = 0) +
+  labs(title = "ROC Curve: Thalamo-mesencephalic Distance for ON Atrophy Prediction",
+       x = "False Positive Rate (1 - Specificity)",
+       y = "Sensitivity") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 11, face = "bold"),
+        panel.grid.minor = element_blank()) +
+  coord_equal()
+
+p3 <- ggarrange(fig3a, fig3b, ncol = 2, nrow = 1)
+ggsave("figure3.png", p3, width = 12, height = 5, 
+       device='png', dpi=300, bg = "white")
+
+# Figura 4: Correlaciones con Grado Frisen (todos los ojos)
+DATOSM_all_eyes$`Frisen n` <- as.numeric(DATOSM_all_eyes$Frisen)
+
+fig4a <- ggscatter(DATOSM_all_eyes, x = "Frisen n", y = "Presión LCR", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "Frisen Grade", ylab = "CSF Pressure (cmH2O)") +
+  theme_minimal()
+
+fig4b <- ggscatter(DATOSM_all_eyes, x = "Frisen n", y = "Distancia talamomesencefalica", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "Frisen Grade", ylab = "Thalamo-mesencephalic distance (mm)") +
+  theme_minimal()
+
+fig4c <- ggscatter(DATOSM_all_eyes, x = "Frisen n", y = "Edad", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "Frisen Grade", ylab = "Age (years)") +
+  theme_minimal()
+
+fig4d <- ggscatter(DATOSM_all_eyes, x = "Frisen n", y = "Ancho del Meckel", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "Frisen Grade", ylab = "Meckel width (mm)") +
+  theme_minimal()
+
+p4 <- ggarrange(fig4a, fig4b, fig4c, fig4d, ncol = 2, nrow = 2)
+ggsave("figure4.png", p4, width = 10, height = 10, 
+       device='png', dpi=300)
+
+# Mostrar figuras
+p1
+p2
+p3
+p4
+```
+# Frisen 4-5
+
+```{r}
+# =====================================================================
+# CARGA Y PREPROCESAMIENTO DE DATOS
+# =====================================================================
+
+# Función para encontrar el directorio raíz del proyecto
+project_root <- function(){
+  qdir <- Sys.getenv("QUARTO_PROJECT_DIR")
+  if (nzchar(qdir)) return(normalizePath(qdir, winslash = "/", mustWork = FALSE))
+  
+  ci <- knitr::current_input()
+  if (!is.null(ci) && length(ci) == 1 && nzchar(ci)) {
+    p <- normalizePath(ci, winslash = "/", mustWork = FALSE)
+    d <- dirname(p)
+    if (basename(d) == "docs") return(dirname(d))
+    return(d)
+  }
+  
+  od <- knitr::opts_knit$get("output.dir")
+  if (!is.null(od) && nzchar(od)) {
+    od <- normalizePath(od, winslash = "/", mustWork = FALSE)
+    if (basename(od) == "docs") return(dirname(od))
+    return(od)
+  }
+  
+  cur <- normalizePath(getwd(), winslash = "/", mustWork = FALSE)
+  for (i in 1:6) {
+    if (dir.exists(file.path(cur, "data"))) return(cur)
+    nxt <- dirname(cur)
+    if (identical(nxt, cur)) break
+    cur <- nxt
+  }
+  cur
+}
+
+root_dir <- project_root()
+data_dir <- file.path(root_dir, "data")
+
+find_data <- function(pattern){
+  f <- list.files(data_dir, pattern = pattern, ignore.case = TRUE, full.names = TRUE)
+  if(length(f) == 0) stop("Archivo no encontrado: ", pattern, " en ", data_dir)
+  f[[1]]
+}
+
+# Cargar archivo de datos - Hipertensión 1
+file_hiper1 <- find_data("Hipertensi[oó]n\\.xlsx$|Hipertensi[oó]n1\\.xlsx$")
+
+# Leer la hoja "RM 1 y RM 2" con tipos de columnas específicos
+col_types <- c(rep("text", 3), rep("date", 2), "text", rep("numeric", 65), "text", "text")
+Hiper1 <- read_excel(file_hiper1, sheet = "RM 1 y RM 2", col_types = col_types)
+
+
+# Corregir nombres de columnas duplicadas
+names(Hiper1) <- make.unique(names(Hiper1), sep = " ")
+
+# =====================================================================
+# EXTRACCIÓN DEL SEXO A PARTIR DEL NOMBRE
+# =====================================================================
+
+extract_sex <- function(names_vector) {
+  names_upper <- toupper(trimws(names_vector))
+  
+  male_names <- c("JUAN", "JOSE", "PEDRO", "CARLOS", "LUIS", "JORGE", "ALBERTO", 
+                  "FRANCISCO", "ANTONIO", "MIGUEL", "MANUEL", "FERNANDO", "SERGIO",
+                  "RICARDO", "EDUARDO", "MARIO", "ROBERTO", "DANIEL", "PABLO",
+                  "ALEJANDRO", "ANDRES", "DIEGO", "RAFAEL", "RAMON", "VICTOR",
+                  "MARTIN", "RAUL", "OSCAR", "ALFONSO", "ARTURO", "ENRIQUE",
+                  "GERARDO", "HECTOR", "JAVIER", "JESUS", "MARCO", "OMAR")
+  
+  female_names <- c("MARIA", "ANA", "LAURA", "PATRICIA", "CARMEN", "ROSA", "SOFIA",
+                   "GABRIELA", "ELENA", "MARTHA", "LUCIA", "ANDREA", "ADRIANA",
+                   "MONICA", "TERESA", "CLAUDIA", "BEATRIZ", "SANDRA", "VERONICA",
+                   "ALEJANDRA", "LETICIA", "GLORIA", "ISABEL", "NORMA", "ALICIA",
+                   "SILVIA", "GUADALUPE", "BLANCA", "MARGARITA", "JULIA", "PAULA",
+                   "DANIELA", "CAROLINA", "NATALIA", "VALERIA", "FERNANDA")
+  
+  sex <- character(length(names_vector))
+  
+  for (i in seq_along(names_vector)) {
+    if (is.na(names_upper[i]) || names_upper[i] == "") {
+      sex[i] <- NA
+    } else {
+      first_name <- strsplit(names_upper[i], " ")[[1]][1]
+      
+      if (first_name %in% male_names) {
+        sex[i] <- "Male"
+      } else if (first_name %in% female_names) {
+        sex[i] <- "Female"
+      } else {
+        if (grepl("A$|E$", first_name)) {
+          sex[i] <- "Female"
+        } else if (grepl("O$|[^AEIOU]$", first_name)) {
+          sex[i] <- "Male"
+        } else {
+          sex[i] <- "Unknown"
+        }
+      }
+    }
+  }
+  
+  return(sex)
+}
+
+# Agregar sexo al dataframe
+Hiper1$Sex <- extract_sex(Hiper1$NOMBRE)
+Hiper1$Sex <- factor(Hiper1$Sex, levels = c("Female", "Male", "Unknown"))
+Hiper1 <- Hiper1 %>% filter(`Frisen OD` >= 4 | `Frisen OI` >= 4)
+# =====================================================================
+# CREAR DATASET EXPANDIDO POR OJO
+# =====================================================================
+
+# Crear dataset largo con una fila por ojo para análisis de atrofia/Frisen
+Hiper1_eyes <- bind_rows(
+  Hiper1 %>% 
+    select(-`Frisen OI`, -`CV atrofia OI`) %>%
+    rename(Frisen = `Frisen OD`, `CV atrofia` = `CV atrofia OD`) %>%
+    mutate(Eye = "OD"),
+  Hiper1 %>% 
+    select(-`Frisen OD`, -`CV atrofia OD`) %>%
+    rename(Frisen = `Frisen OI`, `CV atrofia` = `CV atrofia OI`) %>%
+    mutate(Eye = "OI")
+)
+
+
+# =====================================================================
+# FUNCIONES AUXILIARES
+# =====================================================================
+
+# Función para limpiar nombres de columnas
+clean_names <- function(x) {
+  x <- gsub("\\(I\\)_", "", x)
+  x <- gsub("\\(II\\)_", "", x)
+  x <- gsub("_1$|_2$", "", x)
+  x <- gsub("_", " ", x)
+  x <- gsub("\\.\\.\\..*", "", x)
+  x <- trimws(x)
+  return(x)
+}
+
+# Función de traducción ampliada (CORREGIDA)
+translate_var <- function(x) {
+  translations <- c(
+    "Edad" = "Age",
+    "EDAD" = "Age",
+    "Sexo" = "Sex",
+    "Sex" = "Sex",
+    "Ancho del NO" = "ON width",
+    "Virchow Robin medida" = "Virchow Robin measurement",
+    "Ancho del Meckel" = "Meckel width",
+    "Circunferencia del Meckel" = "Meckel circumference",
+    "Ancho del 3ro" = "3rd ventricle width",
+    "Altura del Aracnoidocele" = "Arachnoidocele height",
+    "Descenso tonsilar cuantitativo" = "Quantitative tonsillar descent",
+    "Espesor del TCS nucal" = "Nuchal SCT thickness",
+    "Distancia talamomesencefalica" = "Thalamo-mesencephalic distance",
+    "Atrio" = "Atrium",
+    "VL frontal" = "Frontal VL",
+    "Tercer Ventriculo" = "Third Ventricle",
+    "Presión LCR" = "CSF Pressure",
+    "Tiempo sin ACTZ" = "Time without ACTZ",
+    "Válvula derivativa" = "Shunt valve",
+    "CV atrofia" = "ON atrophy",
+    "CV atrofia OD" = "ON atrophy RE",
+    "CV atrofia OI" = "ON atrophy LE",
+    "Frisen" = "Frisen Grade",
+    "Frisen OD" = "Frisen Grade RE",
+    "Frisen OI" = "Frisen Grade LE",
+    "Distención de vainas NO" = "ON sheath distention",
+    "Distención III NC" = "CN III distention",
+    "Distención  NC" = "CN distention",
+    "Aplanamiento posterior del globo" = "Posterior globe flattening",
+    "Protrusión del disco óptico" = "Optic disc protrusion",
+    "Realce del NO" = "ON enhancement",
+    "Meckel prominente" = "Prominent Meckel",
+    "Forma del Meckel" = "Meckel shape",
+    "Granulaciones Aracnoideas" = "Arachnoid granulations",
+    "Aracnoidocele Selar" = "Sellar arachnoidocele",
+    "Silla turca amplia aracnoidocele expansivo" = "Enlarged sella turcica with expansive arachnoidocele",  # CORREGIDA
+    "Silla turca amplia (aracnoidocele expansivo)" = "Enlarged sella turcica with expansive arachnoidocele", # AGREGADA
+    "Meningocele" = "Meningocele",
+    "Meningoencefalocele" = "Meningoencephalocele",
+    "Descenso tonsilar" = "Tonsillar descent",
+    "Estenosis seno sigmoideo" = "Sigmoid sinus stenosis",
+    "Cefalea crónica" = "Chronic headache",
+    "Otra Cx" = "Other surgery"
+  )
+  
+  for(old in names(translations)) {
+    x <- gsub(old, translations[old], x)
+  }
+  return(x)
+}
+
+# Función combinada para visualización
+clean_and_translate <- function(x) {
+  translate_var(clean_names(x))
+}
+
+# =====================================================================
+# TABLA 0: DESCRIPCIÓN COMPLETA DE LA MUESTRA BASAL (VERSIÓN MEJORADA)
+# Reemplazar la sección original de TABLA 0 con este código
+# =====================================================================
+
+# Función para formatear estadísticas continuas
+format_continuous <- function(data, var) {
+  vals <- na.omit(data[[var]])
+  if (length(vals) > 0) {
+    return(sprintf("%.2f ± %.2f", mean(vals), sd(vals)))
+  }
+  return("NA")
+}
+
+# Función para formatear estadísticas categóricas
+format_categorical <- function(data, var, category = "Present") {
+  if (is.factor(data[[var]]) || is.character(data[[var]])) {
+    tbl <- table(data[[var]])
+    n_total <- sum(tbl)
+    
+    if (category %in% names(tbl)) {
+      n <- tbl[category]
+      pct <- (n / n_total) * 100
+      return(sprintf("%d (%.1f)", n, pct))
+    } else if ("Female" %in% names(tbl)) {
+      # Para variable Sex, mostrar Female
+      n <- tbl["Female"]
+      pct <- (n / n_total) * 100
+      return(sprintf("%d (%.1f)", n, pct))
+    } else if ("Yes" %in% names(tbl)) {
+      n <- tbl["Yes"]
+      pct <- (n / n_total) * 100
+      return(sprintf("%d (%.1f)", n, pct))
+    } else if (length(tbl) > 0) {
+      # Para variables multiclase como Frisen, mostrar distribución completa
+      result <- paste(sprintf("%s: %d (%.1f)", 
+                             names(tbl), tbl, (tbl/n_total)*100), 
+                     collapse = "; ")
+      return(result)
+    }
+  }
+  return("NA")
+}
+
+# Preparar datos basales usando el dataset Hiper1 (a nivel paciente, no expandido)
+descriptive_data <- Hiper1 %>%
+  mutate(
+    # Variables demográficas y clínicas
+    Age = Edad,
+    CSF_Pressure = `Presión LCR`,
+    Time_without_ACTZ = `Tiempo sin ACTZ`,
+    
+    # Variables numéricas tiempo 1 (basales)
+    ON_width_T1 = `(I)_Ancho del NO`,
+    Virchow_Robin_T1 = `(I)_Virchow Robin medida`,
+    Meckel_width_T1 = `(I)_Ancho del Meckel`, 
+    Meckel_circumference_T1 = `(I)_Circunferencia del Meckel`,
+    Third_ventricle_width_T1 = `(I)_Ancho del 3ro`,
+    Arachnoidocele_height_T1 = `(I)_Altura del Aracnoidocele`,
+    Tonsillar_descent_T1 = `(I)_Descenso tonsilar cuantitativo`,
+    Nuchal_SCT_T1 = `(I)_Espesor del TCS nucal`,
+    Thalamo_mesencephalic_T1 = `(I)_Distancia talamomesencefalica`,
+    Atrium_T1 = `(I)_Atrio`,
+    Frontal_VL_T1 = `(I)_VL frontal`,
+    Third_ventricle_T1 = `(I)_Tercer Ventriculo`,
+    
+    # Variables de atrofia y grado por ojo
+    Shunt_valve = factor(`Válvula derivativa`, levels = c(1,2), labels = c("Yes", "No")),
+    ON_atrophy_OD = factor(`CV atrofia OD`, levels = c(1,2), labels = c("Present", "Absent")),
+    ON_atrophy_OI = factor(`CV atrofia OI`, levels = c(1,2), labels = c("Present", "Absent")),
+    Frisen_Grade_OD = factor(`Frisen OD`),
+    Frisen_Grade_OI = factor(`Frisen OI`),
+    Chronic_headache = factor(`Cefalea crónica`, levels = c(1,2), labels = c("Yes", "No")),
+    Other_surgery = factor(`Otra Cx`, levels = c(1,2), labels = c("Yes", "No")),
+    
+    # Variables categóricas tiempo 1
+    ON_sheath_distention_T1 = factor(`(I)_Distención de vainas NO`, levels = c(1,2), labels = c("Present", "Absent")),
+    CN_III_distention_T1 = factor(`(I)_Distención III NC`, levels = c(1,2), labels = c("Present", "Absent")),
+    Posterior_globe_flattening_T1 = factor(`(I)_Aplanamiento posterior del globo`, levels = c(1,2), labels = c("Present", "Absent")),
+    Optic_disc_protrusion_T1 = factor(`(I)_Protrusión del disco óptico`, levels = c(1,2), labels = c("Present", "Absent")),
+    ON_enhancement_T1 = factor(`(I)_Realce del NO`, levels = c(1,2), labels = c("Present", "Absent")),
+    Prominent_Meckel_T1 = factor(`(I)_Meckel prominente`, levels = c(1,2), labels = c("Present", "Absent")),
+    Meckel_shape_T1 = factor(`(I)_Forma del Meckel`, levels = c(1,2,3), labels = c("Type1", "Type2", "Type3")),
+    Arachnoid_granulations_T1 = factor(`(I)_Granulaciones Aracnoideas`, levels = c(1,2), labels = c("Present", "Absent")),
+    Meningocele_T1 = factor(`(I)_Meningocele`, levels = c(1,2), labels = c("Present", "Absent")),
+    Meningoencephalocele_T1 = factor(`(I)_Meningoencefalocele`, levels = c(1,2), labels = c("Present", "Absent")),
+    Sellar_arachnoidocele_T1 = factor(`(I)_Aracnoidocele Selar`, levels = c(1,2), labels = c("Present", "Absent")),
+    Enlarged_sella_T1 = factor(`(I)_Silla turca amplia aracnoidocele expansivo`, levels = c(1,2), labels = c("Present", "Absent")),
+    Tonsillar_descent_cat_T1 = factor(`(I)_Descenso tonsilar`, levels = c(1,2), labels = c("Present", "Absent")),
+    Sigmoid_stenosis_T1 = factor(`(I)_Estenosis seno sigmoideo`, levels = c(1,2), labels = c("Present", "Absent")),
+    Sex = Sex
+  )
+
+# Calcular n para cada grupo
+n_total <- nrow(descriptive_data)
+n_valve <- sum(descriptive_data$Shunt_valve == "Yes", na.rm = TRUE)
+n_no_valve <- sum(descriptive_data$Shunt_valve == "No", na.rm = TRUE)
+
+# Crear tabla descriptiva completa
+TABLA0_rows <- list()
+
+# Variables demográficas
+demo_vars <- list(
+  list(var = "Age", name = "Age (years)", cat = FALSE),
+  list(var = "Sex", name = "Sex (Female)", cat = TRUE),
+  list(var = "CSF_Pressure", name = "CSF Pressure (cmH2O)", cat = FALSE),
+  list(var = "Time_without_ACTZ", name = "Time without ACTZ (days)", cat = FALSE)
+)
+
+# Variables de imagen cuantitativas
+imaging_quant_vars <- list(
+  list(var = "ON_width_T1", name = "ON width (mm)", cat = FALSE),
+  list(var = "Virchow_Robin_T1", name = "Virchow Robin measurement (mm)", cat = FALSE),
+  list(var = "Meckel_width_T1", name = "Meckel width (mm)", cat = FALSE),
+  list(var = "Meckel_circumference_T1", name = "Meckel circumference (mm)", cat = FALSE),
+  list(var = "Third_ventricle_width_T1", name = "3rd ventricle width (mm)", cat = FALSE),
+  list(var = "Arachnoidocele_height_T1", name = "Arachnoidocele height (mm)", cat = FALSE),
+  list(var = "Tonsillar_descent_T1", name = "Tonsillar descent (mm)", cat = FALSE),
+  list(var = "Nuchal_SCT_T1", name = "Nuchal SCT thickness (mm)", cat = FALSE),
+  list(var = "Thalamo_mesencephalic_T1", name = "Thalamo-mesencephalic distance (mm)", cat = FALSE),
+  list(var = "Atrium_T1", name = "Atrium (mm)", cat = FALSE),
+  list(var = "Frontal_VL_T1", name = "Frontal VL (mm)", cat = FALSE),
+  list(var = "Third_ventricle_T1", name = "Third Ventricle (mm)", cat = FALSE)
+)
+
+# Variables de atrofia y grado por ojo
+atrophy_vars <- list(
+  list(var = "ON_atrophy_OD", name = "ON atrophy OD", cat = TRUE),
+  list(var = "ON_atrophy_OI", name = "ON atrophy OI", cat = TRUE),
+  list(var = "Frisen_Grade_OD", name = "Frisen Grade OD", cat = TRUE),
+  list(var = "Frisen_Grade_OI", name = "Frisen Grade OI", cat = TRUE),
+  list(var = "Chronic_headache", name = "Chronic headache", cat = TRUE),
+  list(var = "Other_surgery", name = "Other surgery", cat = TRUE)
+)
+
+# Variables de signos de imagen categóricas
+imaging_cat_vars <- list(
+  list(var = "ON_sheath_distention_T1", name = "ON sheath distention", cat = TRUE),
+  list(var = "CN_III_distention_T1", name = "CN III distention", cat = TRUE),
+  list(var = "Posterior_globe_flattening_T1", name = "Posterior globe flattening", cat = TRUE),
+  list(var = "Optic_disc_protrusion_T1", name = "Optic disc protrusion", cat = TRUE),
+  list(var = "ON_enhancement_T1", name = "ON enhancement", cat = TRUE),
+  list(var = "Prominent_Meckel_T1", name = "Prominent Meckel", cat = TRUE),
+  list(var = "Meckel_shape_T1", name = "Meckel shape", cat = TRUE),
+  list(var = "Arachnoid_granulations_T1", name = "Arachnoid granulations", cat = TRUE),
+  list(var = "Meningocele_T1", name = "Meningocele", cat = TRUE),
+  list(var = "Meningoencephalocele_T1", name = "Meningoencephalocele", cat = TRUE),
+  list(var = "Sellar_arachnoidocele_T1", name = "Sellar arachnoidocele", cat = TRUE),
+  list(var = "Enlarged_sella_T1", name = "Enlarged sella turcica", cat = TRUE),
+  list(var = "Tonsillar_descent_cat_T1", name = "Tonsillar descent (categorical)", cat = TRUE),
+  list(var = "Sigmoid_stenosis_T1", name = "Sigmoid sinus stenosis", cat = TRUE)
+)
+
+# Combinar todas las variables
+all_vars <- c(demo_vars, imaging_quant_vars, atrophy_vars, imaging_cat_vars)
+
+# Crear filas de la tabla
+for (v in all_vars) {
+  if (v$cat) {
+    # Variables categóricas
+    overall <- format_categorical(descriptive_data, v$var)
+    with_valve <- format_categorical(filter(descriptive_data, Shunt_valve == "Yes"), v$var)
+    without_valve <- format_categorical(filter(descriptive_data, Shunt_valve == "No"), v$var)
+    
+    # Test estadístico para categóricas
+    if (!grepl("Frisen", v$var)) {
+      tbl <- table(descriptive_data[[v$var]], descriptive_data$Shunt_valve)
+      if (nrow(tbl) > 0 && ncol(tbl) > 0) {
+        if (min(tbl) < 5) {
+          p_val <- fisher.test(tbl)$p.value
+        } else {
+          p_val <- suppressWarnings(chisq.test(tbl))$p.value
+        }
+      } else {
+        p_val <- NA
+      }
+    } else {
+      # Para Frisen Grade usar test no paramétrico
+      if (sum(!is.na(descriptive_data[[v$var]])) > 1) {
+        p_val <- kruskal.test(as.numeric(descriptive_data[[v$var]]) ~ descriptive_data$Shunt_valve)$p.value
+      } else {
+        p_val <- NA
+      }
+    }
+  } else {
+    # Variables continuas
+    overall <- format_continuous(descriptive_data, v$var)
+    with_valve <- format_continuous(filter(descriptive_data, Shunt_valve == "Yes"), v$var)
+    without_valve <- format_continuous(filter(descriptive_data, Shunt_valve == "No"), v$var)
+    
+    # Test t para continuas
+    if (sum(!is.na(descriptive_data[[v$var]])) > 1) {
+      p_val <- t.test(descriptive_data[[v$var]] ~ descriptive_data$Shunt_valve)$p.value
+    } else {
+      p_val <- NA
+    }
+  }
+  
+  TABLA0_rows[[length(TABLA0_rows) + 1]] <- data.frame(
+    Variable = v$name,
+    Overall = overall,
+    `With Valve` = with_valve,
+    `Without Valve` = without_valve,
+    `p value` = ifelse(is.na(p_val), "NA", sprintf("%.3f", p_val)),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+TABLA0_BASELINE <- bind_rows(TABLA0_rows)
+
+# Actualizar encabezados con números
+names(TABLA0_BASELINE) <- c("Variable", 
+                            paste0("Overall (n=", n_total, ")"),
+                            paste0("With Valve (n=", n_valve, ")"),
+                            paste0("Without Valve (n=", n_no_valve, ")"),
+                            "p value")
+
+
+# =====================================================================
+# ANÁLISIS 1: VARIABLES CONTINUAS PRE-POST (NIVEL PACIENTE)
+# =====================================================================
+
+# Seleccionar columnas para análisis pre-post
+HiperOrd <- Hiper1[,c(8,11,12,19,20,23:26,31,32,43,44,49:52,55:58,59:60,61:62,63,64,71)]
+
+# Verificar que las columnas sean numéricas (excepto la válvula)
+cols_to_check <- c(1:24, 26)
+for(col in cols_to_check) {
+  HiperOrd[,col] <- as.numeric(HiperOrd[[col]])
+}
+
+# Factorizar válvula derivativa
+HiperOrd$`Válvula derivativa` <- factor(HiperOrd$`Válvula derivativa`,
+                                        levels=c(1,2),
+                                        labels = c("Yes","No"))
+
+# Pruebas t pareadas y ANCOVA
+ANCOVAS <- list()
+TEMP <- list()
+TTEST <- list()
+
+for (i in seq(2,24,2)) {
+  ANCOVAS[[i]] <- aov(HiperOrd[[i+1]] ~ HiperOrd[[i]] + HiperOrd[["Válvula derivativa"]])
+  TEMP[[i]] <- summary(ANCOVAS[[i]])
+  TTEST[[i]] <- t.test(HiperOrd[[i]], HiperOrd[[i+1]], 
+                        paired = TRUE, alternative = "two.sided")
+}
+
+# Crear tabla de resultados
+TABLA1_rows <- list()
+
+for (i in seq(2,24,2)) {
+  var_name <- clean_and_translate(colnames(HiperOrd[,i]))
+  
+  vals_t1 <- as.numeric(HiperOrd[[i]])
+  mean1 <- mean(vals_t1, na.rm = TRUE)
+  sd1 <- sd(vals_t1, na.rm = TRUE)
+  t1_stats <- sprintf("%.2f ± %.2f", mean1, sd1)
+  
+  vals_t2 <- as.numeric(HiperOrd[[i+1]])
+  mean2 <- mean(vals_t2, na.rm = TRUE)
+  sd2 <- sd(vals_t2, na.rm = TRUE)
+  t2_stats <- sprintf("%.2f ± %.2f", mean2, sd2)
+  
+  valve_mask <- HiperOrd$`Válvula derivativa`=="Yes"
+  no_valve_mask <- HiperOrd$`Válvula derivativa`=="No"
+  
+  vals_valve <- vals_t2[valve_mask]
+  mean_valve <- mean(vals_valve, na.rm = TRUE)
+  sd_valve <- sd(vals_valve, na.rm = TRUE)
+  valve_stats <- sprintf("%.2f ± %.2f", mean_valve, sd_valve)
+  
+  vals_no_valve <- vals_t2[no_valve_mask]
+  mean_no_valve <- mean(vals_no_valve, na.rm = TRUE)
+  sd_no_valve <- sd(vals_no_valve, na.rm = TRUE)
+  no_valve_stats <- sprintf("%.2f ± %.2f", mean_no_valve, sd_no_valve)
+  
+  TABLA1_rows[[length(TABLA1_rows) + 1]] <- data.frame(
+    Variable = var_name,
+    `T1 (Mean ± SD)` = t1_stats,
+    `T2 (Mean ± SD)` = t2_stats,
+    `p value (Paired t)` = sprintf("%.4f", TTEST[[i]]$p.value),
+    `T2 with Valve` = valve_stats,
+    `T2 without Valve` = no_valve_stats,
+    `p value (ANCOVA)` = sprintf("%.4f", TEMP[[i]][[1]][2,5]),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+TABLA1 <- bind_rows(TABLA1_rows)
+
+# =====================================================================
+# ANÁLISIS 2: VARIABLES CATEGÓRICAS PRE-POST (NIVEL PACIENTE)
+# =====================================================================
+
+HiperOrd2 <- Hiper1[,c(9,10,13:18,21,22,27:30,33:36,37,39,41,42,45:48,53,54,64,66:70)]
+
+# Factorizar variables
+factorizar <- function(x) factor(x, levels=c(1,2), labels = c("Yes","No"))
+HiperOrd2 <- HiperOrd2 %>% mutate_at(c(1:10,13:30), factorizar)
+HiperOrd2.2 <- HiperOrd2[,c(1:10,13:30)]
+
+# Pruebas de McNemar
+MNT <- list()
+ODDS <- list()
+PROP1 <- list()
+PROP2 <- list()
+CHIT <- list()
+PROPVD <- list()
+ODDS2 <- list()
+
+for (i in seq(1,25,2)){
+  MNT[[i]] <- HiperOrd2.2[,c(i,i+1)]
+  PROP1[[i]] <- as.data.frame(prop.table(table(HiperOrd2.2[,i])))
+  PROP2[[i]] <- as.data.frame(prop.table(table(HiperOrd2.2[,i+1])))
+  ODDS[[i]] <- mcnemar.test(table(MNT[[i]]))
+  CHIT[[i]] <- HiperOrd2.2[,c(i+1,27)]
+  PROPVD[[i]] <- as.data.frame(prop.table(table(CHIT[[i]])))
+  ODDS2[[i]] <- suppressWarnings(chisq.test(table(CHIT[[i]])))
+}
+
+TABLA2_rows <- list()
+
+for (i in seq(1,25,2)) {
+  var_name <- clean_and_translate(colnames(HiperOrd2.2[,i]))
+  
+  tbl1 <- table(HiperOrd2.2[,i])
+  if ("Yes" %in% names(tbl1)) {
+    n1 <- tbl1["Yes"]
+    pct1 <- (n1 / sum(tbl1)) * 100
+    t1_stats <- sprintf("%d (%.1f)", n1, pct1)
+  } else {
+    t1_stats <- "0 (0.0)"
+  }
+  
+  tbl2 <- table(HiperOrd2.2[,i+1])
+  if ("Yes" %in% names(tbl2)) {
+    n2 <- tbl2["Yes"]
+    pct2 <- (n2 / sum(tbl2)) * 100
+    t2_stats <- sprintf("%d (%.1f)", n2, pct2)
+  } else {
+    t2_stats <- "0 (0.0)"
+  }
+  
+  tbl_valve <- table(HiperOrd2.2[HiperOrd2.2$`Válvula derivativa`=="Yes", i+1])
+  tbl_no_valve <- table(HiperOrd2.2[HiperOrd2.2$`Válvula derivativa`=="No", i+1])
+  
+  if ("Yes" %in% names(tbl_valve)) {
+    n_valve <- tbl_valve["Yes"]
+    pct_valve <- (n_valve / sum(tbl_valve)) * 100
+    valve_stats <- sprintf("%d (%.1f)", n_valve, pct_valve)
+  } else {
+    valve_stats <- "0 (0.0)"
+  }
+  
+  if ("Yes" %in% names(tbl_no_valve)) {
+    n_no_valve <- tbl_no_valve["Yes"]
+    pct_no_valve <- (n_no_valve / sum(tbl_no_valve)) * 100
+    no_valve_stats <- sprintf("%d (%.1f)", n_no_valve, pct_no_valve)
+  } else {
+    no_valve_stats <- "0 (0.0)"
+  }
+  
+  TABLA2_rows[[length(TABLA2_rows) + 1]] <- data.frame(
+    Variable = var_name,
+    `T1 n (%)` = t1_stats,
+    `T2 n (%)` = t2_stats,
+    `p value (McNemar)` = sprintf("%.4f", ODDS[[i]]$p.value),
+    `T2 with Valve n (%)` = valve_stats,
+    `T2 without Valve n (%)` = no_valve_stats,
+    `p value (Chi-square)` = sprintf("%.4f", ODDS2[[i]]$p.value),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+TABLA2 <- bind_rows(TABLA2_rows)
+
+# =====================================================================
+# ANÁLISIS 3: ANÁLISIS DE ATROFIA (TODOS LOS OJOS COMO UNIDADES)
+# =====================================================================
+
+# Preparar datos para análisis de atrofia - todos los ojos juntos
+DATOSM <- Hiper1[,c(8,9,seq(11,61,2),63:71)]
+DATOSM <- DATOSM[,-17]
+
+# Recodificar y factorizar variables categóricas
+DATOSM <- DATOSM %>% 
+  mutate_at(c(2,4,5,6,8,11,12,14,15,16,17,19,20,23,29,31,33), 
+            list(~recode(., `2`=0)))
+
+DATOSM <- DATOSM %>% 
+  mutate_at(c(2,4,5,6,8,11,12,14,15,16,17,19,20,23,29,31,33), 
+            list(~factor(., levels = c(0,1), labels = c("Absent","Present"))))
+
+colnames(DATOSM) <- gsub('\\(I\\)_','', colnames(DATOSM))
+
+# Expandir datos para análisis por ojo
+DATOSM_all_eyes <- Hiper1_eyes %>%
+  select(Edad = Edad, `Ancho del NO` = `(I)_Ancho del NO`,
+         `Ancho del 3ro` = `(I)_Ancho del 3ro`,
+         `Virchow Robin medida` = `(I)_Virchow Robin medida`,
+         `Ancho del Meckel` = `(I)_Ancho del Meckel`,
+         `Circunferencia del Meckel` = `(I)_Circunferencia del Meckel`,
+         `Altura del Aracnoidocele` = `(I)_Altura del Aracnoidocele`,
+         `Descenso tonsilar cuantitativo` = `(I)_Descenso tonsilar cuantitativo`,
+         `Espesor del TCS nucal` = `(I)_Espesor del TCS nucal`,
+         `Distancia talamomesencefalica` = `(I)_Distancia talamomesencefalica`,
+         `Atrio` = `(I)_Atrio`,
+         `VL frontal` = `(I)_VL frontal`,
+         `Tercer Ventriculo` = `(I)_Tercer Ventriculo`,
+         `Presión LCR` = `Presión LCR`,
+         `CV atrofia`,
+         Frisen) %>%
+  mutate(
+    `CV atrofia` = factor(`CV atrofia`, levels = c(2,1), labels = c("Absent","Present"))
+  )
+
+# Análisis comparativo usando todos los ojos
+TABLA3_rows <- list()
+
+vars_to_test <- c("Edad", "Ancho del NO", "Ancho del 3ro", "Virchow Robin medida",
+                  "Ancho del Meckel", "Circunferencia del Meckel", 
+                  "Altura del Aracnoidocele", "Descenso tonsilar cuantitativo",
+                  "Espesor del TCS nucal", "Distancia talamomesencefalica",
+                  "Atrio", "VL frontal", "Tercer Ventriculo", "Presión LCR")
+
+for (var in vars_to_test) {
+  var_name <- clean_and_translate(var)
+  
+  absent_data <- DATOSM_all_eyes %>% filter(`CV atrofia` == "Absent") %>% pull(!!var)
+  mean_absent <- mean(absent_data, na.rm = TRUE)
+  sd_absent <- sd(absent_data, na.rm = TRUE)
+  n_absent <- sum(!is.na(absent_data))
+  absent_stats <- sprintf("%.2f ± %.2f", mean_absent, sd_absent)
+  
+  present_data <- DATOSM_all_eyes %>% filter(`CV atrofia` == "Present") %>% pull(!!var)
+  mean_present <- mean(present_data, na.rm = TRUE)
+  sd_present <- sd(present_data, na.rm = TRUE)
+  n_present <- sum(!is.na(present_data))
+  present_stats <- sprintf("%.2f ± %.2f", mean_present, sd_present)
+  
+  if(n_absent > 1 && n_present > 1) {
+    t_test <- t.test(absent_data, present_data)
+    w_test <- wilcox.test(absent_data, present_data)
+    t_p <- sprintf("%.4f", t_test$p.value)
+    w_p <- sprintf("%.4f", w_test$p.value)
+  } else {
+    t_p <- "NA"
+    w_p <- "NA"
+  }
+  
+  TABLA3_rows[[length(TABLA3_rows) + 1]] <- data.frame(
+    Variable = var_name,
+    `Absent (Mean ± SD)` = absent_stats,
+    `Present (Mean ± SD)` = present_stats,
+    `n (Absent/Present)` = sprintf("%d/%d", n_absent, n_present),
+    `p value (t-test)` = t_p,
+    `p value (Wilcoxon)` = w_p,
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+TABLA3_atrophy <- bind_rows(TABLA3_rows)
+
+# ANÁLISIS 4: CORRELACIONES CON FRISEN (TODOS LOS OJOS)
+TABLA4_rows <- list()
+
+for (var in vars_to_test) {
+  var_name <- clean_and_translate(var)
+  
+  spear_test <- cor.test(as.numeric(DATOSM_all_eyes$Frisen), 
+                         DATOSM_all_eyes[[var]], 
+                         method = "spearman", use = "complete.obs")
+  
+  # Ya no necesitamos contar n_valid porque será fijo en el título
+  
+  TABLA4_rows[[length(TABLA4_rows) + 1]] <- data.frame(
+    Variable = var_name,
+    `Spearman rho` = sprintf("%.3f", spear_test$estimate),
+    `p value` = sprintf("%.4f", spear_test$p.value),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+TABLA4_frisen <- bind_rows(TABLA4_rows)
+
+# =====================================================================
+# ANÁLISIS 5: VARIABLES CATEGÓRICAS CON ATROFIA (TODOS LOS OJOS)
+# =====================================================================
+
+# Preparar datos categóricos expandidos
+DATOSM3_eyes <- Hiper1_eyes %>%
+  mutate(
+    `CV atrofia` = factor(`CV atrofia`, levels = c(1,2), labels = c("Present","Absent")),
+    `Distención de vainas NO` = factor(`(I)_Distención de vainas NO`, 
+                                       levels = c(1,2), labels = c("Present","Absent")),
+    `Aplanamiento posterior del globo` = factor(`(I)_Aplanamiento posterior del globo`, 
+                                                levels = c(1,2), labels = c("Present","Absent")),
+    `Protrusión del disco óptico` = factor(`(I)_Protrusión del disco óptico`, 
+                                           levels = c(1,2), labels = c("Present","Absent")),
+    `Realce del NO` = factor(`(I)_Realce del NO`, 
+                             levels = c(1,2), labels = c("Present","Absent")),
+    `Meckel prominente` = factor(`(I)_Meckel prominente`, 
+                                 levels = c(1,2), labels = c("Present","Absent")),
+    `Distención III NC` = factor(`(I)_Distención III NC`, 
+                                 levels = c(1,2), labels = c("Present","Absent")),
+    `Granulaciones Aracnoideas` = factor(`(I)_Granulaciones Aracnoideas`, 
+                                         levels = c(1,2), labels = c("Present","Absent")),
+    `Meningocele` = factor(`(I)_Meningocele`, 
+                           levels = c(1,2), labels = c("Present","Absent")),
+    `Meningoencefalocele` = factor(`(I)_Meningoencefalocele`, 
+                                   levels = c(1,2), labels = c("Present","Absent")),
+    `Aracnoidocele Selar` = factor(`(I)_Aracnoidocele Selar`, 
+                                   levels = c(1,2), labels = c("Present","Absent")),
+    `Silla turca amplia aracnoidocele expansivo` = factor(`(I)_Silla turca amplia aracnoidocele expansivo`, 
+                                  levels = c(1,2), labels = c("Present","Absent")),
+    `Descenso tonsilar` = factor(`(I)_Descenso tonsilar`, 
+                                 levels = c(1,2), labels = c("Present","Absent")),
+    `Estenosis seno sigmoideo` = factor(`(I)_Estenosis seno sigmoideo`, 
+                                        levels = c(1,2), labels = c("Present","Absent"))
+  )
+
+cat_vars <- c("Distención de vainas NO", "Aplanamiento posterior del globo",
+              "Protrusión del disco óptico", "Realce del NO", "Meckel prominente",
+              "Distención III NC", "Granulaciones Aracnoideas", "Meningocele",
+              "Meningoencefalocele", "Aracnoidocele Selar", "Silla turca amplia aracnoidocele expansivo",
+              "Descenso tonsilar", "Estenosis seno sigmoideo")
+
+TABLA5_rows <- list()
+
+for (var in cat_vars) {
+  var_name <- clean_and_translate(var)
+  
+  tbl <- table(DATOSM3_eyes[[var]], DATOSM3_eyes$`CV atrofia`)
+  
+  if(nrow(tbl) >= 2 && ncol(tbl) >= 2) {
+    n_no_atrophy <- tbl[1,2]
+    total_no_atrophy <- sum(tbl[,2])
+    pct_no_atrophy <- (n_no_atrophy / total_no_atrophy) * 100
+    no_atrophy_stats <- sprintf("%d/%d (%.1f)", n_no_atrophy, total_no_atrophy, pct_no_atrophy)
+    
+    n_atrophy <- tbl[1,1]
+    total_atrophy <- sum(tbl[,1])
+    pct_atrophy <- (n_atrophy / total_atrophy) * 100
+    atrophy_stats <- sprintf("%d/%d (%.1f)", n_atrophy, total_atrophy, pct_atrophy)
+    
+    or_result <- suppressWarnings(suppressMessages(oddsratio.fisher(tbl)))
+    or_val <- or_result$measure[2,1]
+    or_lower <- or_result$measure[2,2]
+    or_upper <- or_result$measure[2,3]
+    or_stats <- sprintf("%.2f (%.2f-%.2f)", or_val, or_lower, or_upper)
+    
+    p_val <- or_result$p.value[2,2]
+  } else {
+    no_atrophy_stats <- "NA"
+    atrophy_stats <- "NA"
+    or_stats <- "NA"
+    p_val <- NA
+  }
+  
+  TABLA5_rows[[length(TABLA5_rows) + 1]] <- data.frame(
+    Variable = var_name,
+    `No Atrophy n/N (%)` = no_atrophy_stats,
+    `Atrophy n/N (%)` = atrophy_stats,
+    `OR (95% CI)` = or_stats,
+    `p value` = ifelse(is.na(p_val), "NA", sprintf("%.4f", p_val)),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+TABLA5_cat <- bind_rows(TABLA5_rows)
+
+# =====================================================================
+# ANÁLISIS 6: REGRESIÓN LOGÍSTICA (TODOS LOS OJOS)
+# =====================================================================
+
+m_all_eyes <- glm(`CV atrofia` ~ Edad + `Ancho del 3ro` + 
+                  `Distancia talamomesencefalica` + `Presión LCR`, 
+                  data = DATOSM_all_eyes, family = binomial)
+
+coefs <- coef(m_all_eyes)
+se <- summary(m_all_eyes)$coefficients[,2]
+z_vals <- summary(m_all_eyes)$coefficients[,3]
+p_vals <- summary(m_all_eyes)$coefficients[,4]
+or_vals <- exp(coefs)
+conf_int <- suppressWarnings(exp(confint(m_all_eyes)))
+
+TABLA6_rows <- list()
+
+for (i in 1:length(coefs)) {
+  var_name <- clean_and_translate(names(coefs)[i])
+  
+  TABLA6_rows[[length(TABLA6_rows) + 1]] <- data.frame(
+    Variable = var_name,
+    `Beta (SE)` = sprintf("%.3f (%.3f)", coefs[i], se[i]),
+    `OR (95% CI)` = sprintf("%.3f (%.3f-%.3f)", or_vals[i], conf_int[i,1], conf_int[i,2]),
+    `z value` = sprintf("%.3f", z_vals[i]),
+    `p value` = sprintf("%.4f", p_vals[i]),
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+}
+
+TABLA6_regression <- bind_rows(TABLA6_rows)
+
+# =====================================================================
+# ANÁLISIS 7: CURVAS ROC (TODOS LOS OJOS)
+# =====================================================================
+
+roc_csf <- roc(DATOSM_all_eyes$`CV atrofia`, DATOSM_all_eyes$`Presión LCR`, 
+               auc=TRUE, ci=TRUE)
+roc_thalamo <- roc(DATOSM_all_eyes$`CV atrofia`, DATOSM_all_eyes$`Distancia talamomesencefalica`, 
+                   auc=TRUE, ci=TRUE)
+
+coords_csf <- coords(roc_csf, "best")
+coords_thalamo <- coords(roc_thalamo, "best")
+
+TABLA7_roc <- data.frame(
+  Variable = c("CSF Pressure", "Thalamo-mesencephalic distance"),
+  `AUC (95% CI)` = c(
+    sprintf("%.3f (%.3f-%.3f)", roc_csf$auc, roc_csf$ci[1], roc_csf$ci[3]),
+    sprintf("%.3f (%.3f-%.3f)", roc_thalamo$auc, roc_thalamo$ci[1], roc_thalamo$ci[3])
+  ),
+  `Optimal Cutoff` = c(
+    sprintf("%.1f", coords_csf$threshold),
+    sprintf("%.1f", coords_thalamo$threshold)
+  ),
+  `Sensitivity/Specificity` = c(
+    sprintf("%.1f/%.1f", coords_csf$sensitivity*100, coords_csf$specificity*100),
+    sprintf("%.1f/%.1f", coords_thalamo$sensitivity*100, coords_thalamo$specificity*100)
+  ),
+  stringsAsFactors = FALSE,
+  check.names = FALSE
+)
+
+# =====================================================================
+# CREAR DATATABLES INTERACTIVAS
+# =====================================================================
+
+# Crear DataTable interactiva
+dt0 <- datatable(TABLA0_BASELINE,
+  caption = "Table 0: Complete Baseline Characteristics of Study Sample",
+  extensions = c('Buttons', 'FixedColumns'),
+  options = list(
+    dom = 'Bfrtip',
+    buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+    scrollX = TRUE,
+    fixedColumns = list(leftColumns = 1),
+    pageLength = 50
+  ),
+  rownames = FALSE
+) %>%
+  formatStyle(columns = 5,
+              backgroundColor = styleInterval(0.05, c('lightcoral', 'white')))
+
+# Tabla 1: Variables continuas Pre-Post
+dt1 <- datatable(TABLA1,
+  caption = "Table 1: Pre-Post Analysis of Continuous Variables (Patient-level)",
+  extensions = c('Buttons', 'FixedColumns'),
+  options = list(
+    dom = 'Bfrtip',
+    buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+    scrollX = TRUE,
+    fixedColumns = list(leftColumns = 1),
+    pageLength = 15
+  ),
+  rownames = FALSE
+) %>%
+  formatStyle(columns = c(4, 7),
+              backgroundColor = styleInterval(0.05, c('lightcoral', 'white')))
+
+# Tabla 2: Variables categóricas Pre-Post
+dt2 <- datatable(TABLA2,
+  caption = "Table 2: Pre-Post Analysis of Categorical Variables (Patient-level)",
+  extensions = c('Buttons', 'FixedColumns'),
+  options = list(
+    dom = 'Bfrtip',
+    buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+    scrollX = TRUE,
+    fixedColumns = list(leftColumns = 1),
+    pageLength = 15
+  ),
+  rownames = FALSE
+) %>%
+  formatStyle(columns = c(4, 7),
+              backgroundColor = styleInterval(0.05, c('lightcoral', 'white')))
+
+# Tabla 3: Análisis de atrofia
+dt3 <- datatable(TABLA3_atrophy,
+  caption = "Table 3: Continuous Variables by ON Atrophy Status (All Eyes as Units)",
+  extensions = c('Buttons', 'FixedColumns'),
+  options = list(
+    dom = 'Bfrtip',
+    buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+    scrollX = TRUE,
+    fixedColumns = list(leftColumns = 1),
+    pageLength = 15
+  ),
+  rownames = FALSE
+) %>%
+  formatStyle(columns = c(5, 6),
+              backgroundColor = styleInterval(0.05, c('lightcoral', 'white')))
+
+# Crear DataTable con n=42 en el título
+dt4 <- datatable(TABLA4_frisen,
+  caption = "Table 4: Spearman Correlations with Frisen Grade (All Eyes, n=42)",  # n=42 en el título
+  extensions = c('Buttons'),
+  options = list(
+    dom = 'Bfrtip',
+    buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+    pageLength = 15
+  ),
+  rownames = FALSE
+) %>%
+  formatStyle(columns = 3,  # Ahora la columna p-value es la 3 en lugar de la 4
+              backgroundColor = styleInterval(0.05, c('lightcoral', 'white')))
+
+# Tabla 5: Variables categóricas con atrofia
+dt5 <- datatable(TABLA5_cat,
+  caption = "Table 5: Categorical Variables by ON Atrophy Status (All Eyes as Units)",
+  extensions = c('Buttons', 'FixedColumns'),
+  options = list(
+    dom = 'Bfrtip',
+    buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+    scrollX = TRUE,
+    fixedColumns = list(leftColumns = 1),
+    pageLength = 15
+  ),
+  rownames = FALSE
+) %>%
+  formatStyle(columns = 5,
+              backgroundColor = styleInterval(0.05, c('lightcoral', 'white')))
+
+# Tabla 6: Regresión logística
+dt6 <- datatable(TABLA6_regression,
+  caption = "Table 6: Logistic Regression Model for ON Atrophy (All Eyes as Units)",
+  extensions = c('Buttons'),
+  options = list(
+    dom = 'Bfrtip',
+    buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+    pageLength = 10
+  ),
+  rownames = FALSE
+) %>%
+  formatStyle(columns = 5,
+              backgroundColor = styleInterval(0.05, c('lightcoral', 'white')))
+
+# Tabla 7: Análisis ROC
+dt7 <- datatable(TABLA7_roc,
+  caption = "Table 7: ROC Curve Analysis for ON Atrophy Prediction (All Eyes as Units)",
+  extensions = c('Buttons'),
+  options = list(
+    dom = 'Bfrtip',
+    buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+    pageLength = 10
+  ),
+  rownames = FALSE
+)
+
+# Mostrar tablas
+dt0
+dt1
+dt2
+dt3
+dt4
+dt5
+dt6
+dt7
+```
+
+```{r}
+# =====================================================================
+# CREAR FIGURAS
+# =====================================================================
+# =====================================================================
+# FIGURA 1 CORREGIDA - USANDO DIRECTAMENTE DATOS DE TABLA 1
+# =====================================================================
+
+# Primero, vamos a recrear la Tabla 1 para tener los valores exactos
+# y luego usarlos directamente para la figura
+
+# PASO 1: Recalcular Tabla 1 para asegurar consistencia
+HiperOrd <- Hiper1[,c(8,11,12,19,20,23:26,31,32,43,44,49:52,55:58,59:60,61:62,63,64,71)]
+
+# Convertir a numérico
+cols_to_check <- c(1:24, 26)
+for(col in cols_to_check) {
+  HiperOrd[,col] <- as.numeric(HiperOrd[[col]])
+}
+
+# Factorizar válvula derivativa
+HiperOrd$`Válvula derivativa` <- factor(HiperOrd$`Válvula derivativa`,
+                                        levels=c(1,2),
+                                        labels = c("Yes","No"))
+
+# PASO 2: Crear dataframe para gráfico directamente desde los cálculos
+plot_data <- data.frame()
+
+# Variables a incluir (índices de columnas en pares)
+var_pairs <- seq(2,24,2)
+var_names <- c("ON width", "Virchow Robin measurement", "Meckel width",
+               "Meckel circumference", "3rd ventricle width", "Arachnoidocele height",
+               "Quantitative tonsillar descent", "Nuchal SCT thickness",
+               "Thalamo-mesencephalic distance", "Atrium", "Frontal VL", "Third Ventricle")
+
+for(i in 1:length(var_pairs)) {
+  idx <- var_pairs[i]
+  
+  # T1 - Overall
+  vals_t1 <- as.numeric(HiperOrd[[idx]])
+  mean_t1 <- mean(vals_t1, na.rm = TRUE)
+  sd_t1 <- sd(vals_t1, na.rm = TRUE)
+  n_t1 <- sum(!is.na(vals_t1))
+  se_t1 <- sd_t1/sqrt(n_t1)
+  
+  # T2 - Overall
+  vals_t2 <- as.numeric(HiperOrd[[idx+1]])
+  mean_t2 <- mean(vals_t2, na.rm = TRUE)
+  sd_t2 <- sd(vals_t2, na.rm = TRUE)
+  n_t2 <- sum(!is.na(vals_t2))
+  se_t2 <- sd_t2/sqrt(n_t2)
+  
+  # T2 - With Valve
+  valve_mask <- HiperOrd$`Válvula derivativa` == "Yes"
+  vals_t2_valve <- vals_t2[valve_mask]
+  mean_t2_valve <- mean(vals_t2_valve, na.rm = TRUE)
+  sd_t2_valve <- sd(vals_t2_valve, na.rm = TRUE)
+  n_t2_valve <- sum(!is.na(vals_t2_valve))
+  se_t2_valve <- sd_t2_valve/sqrt(n_t2_valve)
+  
+  # T2 - Without Valve
+  no_valve_mask <- HiperOrd$`Válvula derivativa` == "No"
+  vals_t2_no_valve <- vals_t2[no_valve_mask]
+  mean_t2_no_valve <- mean(vals_t2_no_valve, na.rm = TRUE)
+  sd_t2_no_valve <- sd(vals_t2_no_valve, na.rm = TRUE)
+  n_t2_no_valve <- sum(!is.na(vals_t2_no_valve))
+  se_t2_no_valve <- sd_t2_no_valve/sqrt(n_t2_no_valve)
+  
+  # Para el gráfico, necesitamos T1 y T2 para cada grupo
+  # Asumiendo que T1 es igual para ambos grupos (pre-tratamiento)
+  # Necesitamos T1 para cada grupo
+  vals_t1_valve <- vals_t1[valve_mask]
+  mean_t1_valve <- mean(vals_t1_valve, na.rm = TRUE)
+  sd_t1_valve <- sd(vals_t1_valve, na.rm = TRUE)
+  n_t1_valve <- sum(!is.na(vals_t1_valve))
+  se_t1_valve <- sd_t1_valve/sqrt(n_t1_valve)
+  
+  vals_t1_no_valve <- vals_t1[no_valve_mask]
+  mean_t1_no_valve <- mean(vals_t1_no_valve, na.rm = TRUE)
+  sd_t1_no_valve <- sd(vals_t1_no_valve, na.rm = TRUE)
+  n_t1_no_valve <- sum(!is.na(vals_t1_no_valve))
+  se_t1_no_valve <- sd_t1_no_valve/sqrt(n_t1_no_valve)
+  
+  # Agregar datos al dataframe
+  # Grupo con válvula
+  plot_data <- rbind(plot_data,
+    data.frame(
+      Variable = var_names[i],
+      Treatment = "Surgical Treatment",
+      Time = "Pre",
+      Mean = mean_t1_valve,
+      SD = sd_t1_valve,
+      SE = se_t1_valve,
+      n = n_t1_valve
+    ),
+    data.frame(
+      Variable = var_names[i],
+      Treatment = "Surgical Treatment",
+      Time = "Post",
+      Mean = mean_t2_valve,
+      SD = sd_t2_valve,
+      SE = se_t2_valve,
+      n = n_t2_valve
+    ),
+    # Grupo sin válvula
+    data.frame(
+      Variable = var_names[i],
+      Treatment = "Medical Treatment",
+      Time = "Pre",
+      Mean = mean_t1_no_valve,
+      SD = sd_t1_no_valve,
+      SE = se_t1_no_valve,
+      n = n_t1_no_valve
+    ),
+    data.frame(
+      Variable = var_names[i],
+      Treatment = "Medical Treatment",
+      Time = "Post",
+      Mean = mean_t2_no_valve,
+      SD = sd_t2_no_valve,
+      SE = se_t2_no_valve,
+      n = n_t2_no_valve
+    )
+  )
+}
+
+# Calcular intervalos de confianza al 95%
+plot_data$CI_lower <- plot_data$Mean - 1.96 * plot_data$SE
+plot_data$CI_upper <- plot_data$Mean + 1.96 * plot_data$SE
+
+# Factorizar variables para el gráfico
+plot_data$Time <- factor(plot_data$Time, levels = c("Pre", "Post"))
+plot_data$Treatment <- factor(plot_data$Treatment, 
+                              levels = c("Surgical Treatment", "Medical Treatment"))
+
+
+# PASO 4: Crear la figura con los valores correctos
+library(ggplot2)
+
+# Variables seleccionadas para mostrar
+selected_vars <- c("ON width", "3rd ventricle width", "Arachnoidocele height",
+                  "Quantitative tonsillar descent", "Nuchal SCT thickness",
+                  "Thalamo-mesencephalic distance", "Atrium", "Third Ventricle")
+
+p1 <- plot_data %>% 
+  filter(Variable %in% selected_vars) %>%
+  ggplot(aes(x = Time, y = Mean, group = Treatment, color = Treatment, 
+            linetype = Treatment, shape = Treatment)) +
+  geom_line(linewidth = 0.8, alpha = 0.7) + 
+  geom_point(size = 3, alpha = 0.9) +
+  geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper), 
+                width = 0.1, alpha = 0.6, linewidth = 0.6) + 
+  scale_color_manual(values = c("Surgical Treatment" = "black", 
+                               "Medical Treatment" = "grey50")) +
+  scale_linetype_manual(values = c("Surgical Treatment" = "solid", 
+                                   "Medical Treatment" = "longdash")) +
+  scale_shape_manual(values = c("Surgical Treatment" = 16, 
+                                "Medical Treatment" = 17)) +
+  theme_minimal() +
+  ylab("Mean ± 95% CI (mm)") +
+  xlab("Time") +
+  theme(
+    legend.position = "top",
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(size = 10, face = "bold"),
+    axis.text = element_text(size = 9),
+    axis.title = element_text(size = 10),
+    legend.text = element_text(size = 10)
+  ) +
+  facet_wrap(~ Variable, scales = "free_y", ncol = 2) +
+  labs(
+    color = "Treatment Type:",
+    linetype = "Treatment Type:",
+    shape = "Treatment Type:",
+    title = "Evolution of MRI Parameters by Treatment Group",
+    subtitle = "Pre-Post Comparison with 95% Confidence Intervals"
+  )
+
+# Guardar figura
+ggsave("figure1.png", p1, 
+       width = 12, height = 10, device = 'png', dpi = 300, bg = "white")
+
+
+# Figura 2: Boxplots para atrofia del NO (todos los ojos)
+library(ggpubr)
+compara_pares <- list(c("Absent", "Present"))
+
+fig2a <- ggboxplot(DATOSM_all_eyes,
+          x = "CV atrofia",
+          y = "Descenso tonsilar cuantitativo",
+          color = "CV atrofia",
+          palette = c("grey50", "grey10"),
+          shape = "CV atrofia",
+          add = "jitter",
+          add.params = list(alpha = 0.3)) +
+  stat_compare_means(comparisons = compara_pares, method = "wilcox.test") + 
+  xlab("ON Atrophy") + 
+  ylab("Quantitative tonsillar descent (mm)") + 
+  theme_minimal() + 
+  theme(legend.position="none")
+
+fig2b <- ggboxplot(DATOSM_all_eyes,
+          x = "CV atrofia",
+          y = "Distancia talamomesencefalica",
+          color = "CV atrofia",
+          palette = c("grey50", "grey10"),
+          shape = "CV atrofia",
+          add = "jitter",
+          add.params = list(alpha = 0.3)) +
+  stat_compare_means(comparisons = compara_pares, method = "wilcox.test") + 
+  xlab("ON Atrophy") + 
+  ylab("Thalamo-mesencephalic distance (mm)") + 
+  theme_minimal() + 
+  theme(legend.position="none")
+
+fig2c <- ggboxplot(DATOSM_all_eyes,
+          x = "CV atrofia",
+          y = "Presión LCR",
+          color = "CV atrofia",
+          palette = c("grey50", "grey10"),
+          shape = "CV atrofia",
+          add = "jitter",
+          add.params = list(alpha = 0.3)) +
+  stat_compare_means(comparisons = compara_pares, method = "t.test") + 
+  xlab("ON Atrophy") + 
+  ylab("CSF Pressure (cmH2O)") + 
+  theme_minimal() + 
+  theme(legend.position="none")
+
+fig2d <- ggboxplot(DATOSM_all_eyes,
+          x = "CV atrofia",
+          y = "Atrio",
+          color = "CV atrofia",
+          palette = c("grey50", "grey10"),
+          shape = "CV atrofia",
+          add = "jitter",
+          add.params = list(alpha = 0.3)) +
+  stat_compare_means(comparisons = compara_pares, method = "wilcox.test") + 
+  xlab("ON Atrophy") + 
+  ylab("Atrium (mm)") + 
+  theme_minimal() + 
+  theme(legend.position="none")
+
+p2 <- ggarrange(fig2a, fig2b, fig2c, fig2d, ncol = 2, nrow = 2)
+ggsave("figure2.png", p2, width = 10, height = 10, 
+       device='png', dpi=300)
+
+# Figura 3: Curvas ROC
+library(ggplot2)
+roc_csf_df <- data.frame(
+  sensitivity = roc_csf$sensitivities,
+  specificity = roc_csf$specificities,
+  FPR = 1 - roc_csf$specificities
+)
+
+roc_thalamo_df <- data.frame(
+  sensitivity = roc_thalamo$sensitivities,
+  specificity = roc_thalamo$specificities,
+  FPR = 1 - roc_thalamo$specificities
+)
+
+optimal_csf <- coords(roc_csf, "best")
+optimal_thalamo <- coords(roc_thalamo, "best")
+
+fig3a <- ggplot(roc_csf_df, aes(x = FPR, y = sensitivity)) +
+  geom_line(color = "darkblue", linewidth = 1.2) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray50") +
+  geom_point(aes(x = 1 - optimal_csf$specificity, y = optimal_csf$sensitivity),
+            color = "red", size = 4, shape = 16) +
+  annotate("text", x = 0.6, y = 0.3,
+          label = paste0("AUC = ", round(roc_csf$auc, 3),
+                        "\nCI: ", round(roc_csf$ci[1], 3), "-", 
+                        round(roc_csf$ci[3], 3),
+                        "\nOptimal cutoff: ", round(optimal_csf$threshold, 2)),
+          size = 3.5, hjust = 0) +
+  labs(title = "ROC Curve: CSF Pressure for ON Atrophy Prediction",
+       x = "False Positive Rate (1 - Specificity)",
+       y = "Sensitivity") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 11, face = "bold"),
+        panel.grid.minor = element_blank()) +
+  coord_equal()
+
+fig3b <- ggplot(roc_thalamo_df, aes(x = FPR, y = sensitivity)) +
+  geom_line(color = "darkred", linewidth = 1.2) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray50") +
+  geom_point(aes(x = 1 - optimal_thalamo$specificity, y = optimal_thalamo$sensitivity),
+            color = "red", size = 4, shape = 16) +
+  annotate("text", x = 0.6, y = 0.3,
+          label = paste0("AUC = ", round(roc_thalamo$auc, 3),
+                        "\nCI: ", round(roc_thalamo$ci[1], 3), "-", 
+                        round(roc_thalamo$ci[3], 3),
+                        "\nOptimal cutoff: ", round(optimal_thalamo$threshold, 2)),
+          size = 3.5, hjust = 0) +
+  labs(title = "ROC Curve: Thalamo-mesencephalic Distance for ON Atrophy Prediction",
+       x = "False Positive Rate (1 - Specificity)",
+       y = "Sensitivity") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 11, face = "bold"),
+        panel.grid.minor = element_blank()) +
+  coord_equal()
+
+p3 <- ggarrange(fig3a, fig3b, ncol = 2, nrow = 1)
+ggsave("figure3.png", p3, width = 12, height = 5, 
+       device='png', dpi=300, bg = "white")
+
+# Figura 4: Correlaciones con Grado Frisen (todos los ojos)
+DATOSM_all_eyes$`Frisen n` <- as.numeric(DATOSM_all_eyes$Frisen)
+
+fig4a <- ggscatter(DATOSM_all_eyes, x = "Frisen n", y = "Presión LCR", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "Frisen Grade", ylab = "CSF Pressure (cmH2O)") +
+  theme_minimal()
+
+fig4b <- ggscatter(DATOSM_all_eyes, x = "Frisen n", y = "Distancia talamomesencefalica", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "Frisen Grade", ylab = "Thalamo-mesencephalic distance (mm)") +
+  theme_minimal()
+
+fig4c <- ggscatter(DATOSM_all_eyes, x = "Frisen n", y = "Edad", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "Frisen Grade", ylab = "Age (years)") +
+  theme_minimal()
+
+fig4d <- ggscatter(DATOSM_all_eyes, x = "Frisen n", y = "Ancho del Meckel", 
+          add = "reg.line", conf.int = TRUE, 
+          cor.coef = TRUE, cor.method = "spearman",
+          xlab = "Frisen Grade", ylab = "Meckel width (mm)") +
+  theme_minimal()
+
+p4 <- ggarrange(fig4a, fig4b, fig4c, fig4d, ncol = 2, nrow = 2)
+ggsave("figure4.png", p4, width = 10, height = 10, 
+       device='png', dpi=300)
+
+# Mostrar figuras
+p1
+p2
+p3
+p4
+```
